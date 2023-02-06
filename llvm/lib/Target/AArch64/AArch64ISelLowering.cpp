@@ -1146,6 +1146,9 @@ AArch64TargetLowering::AArch64TargetLowering(const TargetMachine &TM,
       }
     }
 
+    // TODO(lawben): Added this
+    setTruncStoreAction(MVT::v16i8, MVT::v16i1, Custom);
+
     // AArch64 has implementations of a lot of rounding-like FP operations.
     for (auto Op :
          {ISD::FFLOOR, ISD::FNEARBYINT, ISD::FCEIL, ISD::FRINT, ISD::FTRUNC,
@@ -5677,6 +5680,64 @@ static SDValue LowerTruncateVectorStore(SDLoc DL, StoreSDNode *ST,
                       ST->getBasePtr(), ST->getMemOperand());
 }
 
+// TODO(lawben): Added this
+// Convert a truncating store to a vector of i1's with a bitmask and vector add.
+// Only applies if the input is all 1's or all 0's.
+static SDValue LowerTruncateVectorToBitmaskStore(SDLoc DL, StoreSDNode *ST,
+                                                 EVT VT, EVT MemVT,
+                                                 SelectionDAG &DAG) {
+  assert(VT.isVector() && "VT should be a vector type");
+  assert(MemVT == MVT::v16i1); // TODO: ||
+  assert(VT == MVT::v16i8);    // TODO: ||
+
+  SDValue Value = ST->getValue();
+
+  dbgs() << "ST dump to bitmask operands:\n";
+  ST->dump();
+  dbgs() << "Value dump to bitmask operands:\n";
+  Value.dump();
+  dbgs() << "Node dump to bitmask operands:\n";
+  Value.getNode()->dump();
+
+  for (unsigned I = 0, E = Value->getNumOperands(); I < E; ++I) {
+    dbgs() << "to bitmask operand " << I << ":\n";
+    Value.getOperand(I).dump();
+  }
+
+  SmallVector<SDValue, 16> MaskConstants;
+  for (unsigned Half = 0; Half < 2; ++Half) {
+    for (unsigned MaskBit = 1; MaskBit <= 128; MaskBit *= 2) {
+      MaskConstants.push_back(DAG.getConstant(MaskBit, DL, MVT::i32));
+    }
+  }
+  SDValue Mask = DAG.getNode(ISD::BUILD_VECTOR, DL, VT, MaskConstants);
+  SDValue RepresentativeBits = DAG.getNode(ISD::AND, DL, VT, Value, Mask);
+
+  EVT HalfVT = VT.getHalfNumVectorElementsVT(*DAG.getContext());
+  unsigned NumElementsInHalf = HalfVT.getVectorNumElements();
+
+  SDValue LowHalf =
+      DAG.getNode(ISD::EXTRACT_SUBVECTOR, DL, HalfVT, RepresentativeBits,
+                  DAG.getConstant(0, DL, MVT::i64));
+  SDValue HighHalf =
+      DAG.getNode(ISD::EXTRACT_SUBVECTOR, DL, HalfVT, RepresentativeBits,
+                  DAG.getConstant(NumElementsInHalf, DL, MVT::i64));
+
+  SDValue ReducedLowBits =
+      DAG.getNode(ISD::VECREDUCE_ADD, DL, MVT::i16, LowHalf);
+  SDValue ReducedHighBits =
+      DAG.getNode(ISD::VECREDUCE_ADD, DL, MVT::i16, HighHalf);
+
+  SDValue ShiftedHighBits =
+      DAG.getNode(ISD::SHL, DL, MVT::i16, ReducedHighBits,
+                  DAG.getConstant(NumElementsInHalf, DL, MVT::i32));
+  SDValue CombinedHalves =
+      DAG.getNode(ISD::OR, DL, MVT::i16, ShiftedHighBits, ReducedLowBits);
+
+  return DAG.getStore(ST->getChain(), DL, CombinedHalves, ST->getBasePtr(),
+                      ST->getMemOperand());
+}
+
 // Custom lowering for any store, vector or scalar and/or default or with
 // a truncate operations.  Currently only custom lower truncate operation
 // from vector v4i16 to v4i8 or volatile stores of i128.
@@ -5710,6 +5771,11 @@ SDValue AArch64TargetLowering::LowerSTORE(SDValue Op,
         MemVT == MVT::v4i8) {
       return LowerTruncateVectorStore(Dl, StoreNode, VT, MemVT, DAG);
     }
+
+    if (StoreNode->isTruncatingStore() && MemVT == MVT::v16i1) {
+      return LowerTruncateVectorToBitmaskStore(Dl, StoreNode, VT, MemVT, DAG);
+    }
+
     // 256 bit non-temporal stores can be lowered to STNP. Do this as part of
     // the custom lowering, as there are no un-paired non-temporal stores and
     // legalization will break up 256 bit inputs.
@@ -12231,6 +12297,8 @@ static SDValue ConstantBuildVector(SDValue Op, SelectionDAG &DAG) {
 
 SDValue AArch64TargetLowering::LowerBUILD_VECTOR(SDValue Op,
                                                  SelectionDAG &DAG) const {
+//  TODO: See where this is different than x86 version!
+//      Currently: "LowerBUILD_VECTOR: alternatives failed"
   EVT VT = Op.getValueType();
 
   if (useSVEForFixedLengthVectorVT(VT,
