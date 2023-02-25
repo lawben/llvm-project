@@ -648,7 +648,7 @@ FlatAffineValueConstraints::addAffineForOpDomain(AffineForOp forOp) {
 LogicalResult FlatAffineValueConstraints::addAffineParallelOpDomain(
     AffineParallelOp parallelOp) {
   size_t ivPos = 0;
-  for (auto iv : parallelOp.getIVs()) {
+  for (Value iv : parallelOp.getIVs()) {
     unsigned pos;
     if (!findVar(iv, &pos)) {
       assert(false && "variable expected for the IV value");
@@ -668,6 +668,7 @@ LogicalResult FlatAffineValueConstraints::addAffineParallelOpDomain(
     else if (failed(addBound(BoundType::UB, pos, upperBound,
                              parallelOp.getUpperBoundsOperands())))
       return failure();
+    ++ivPos;
   }
   return success();
 }
@@ -1382,7 +1383,7 @@ void FlatAffineValueConstraints::swapVar(unsigned posA, unsigned posB) {
       getVarKindAt(posB) == VarKind::Local)
     return;
 
-  // Treat value of a local variable as None.
+  // Treat value of a local variable as std::nullopt.
   if (getVarKindAt(posA) == VarKind::Local)
     values[posB] = std::nullopt;
   else if (getVarKindAt(posB) == VarKind::Local)

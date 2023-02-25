@@ -23,6 +23,7 @@
 #include "Preamble.h"
 #include "SourceCode.h"
 #include "TidyProvider.h"
+#include "clang-include-cleaner/Record.h"
 #include "index/CanonicalIncludes.h"
 #include "index/Index.h"
 #include "index/Symbol.h"
@@ -674,8 +675,7 @@ ParsedAST::build(llvm::StringRef Filename, const ParseInputs &Inputs,
     Diags = CompilerInvocationDiags;
     // Add diagnostics from the preamble, if any.
     if (Preamble)
-      Diags->insert(Diags->end(), Preamble->Diags.begin(),
-                    Preamble->Diags.end());
+      llvm::append_range(*Diags, Patch->patchedDiags());
     // Finally, add diagnostics coming from the AST.
     {
       std::vector<Diag> D = ASTDiags.take(&*CTContext);
@@ -799,6 +799,12 @@ ParsedAST::ParsedAST(PathRef TUPath, llvm::StringRef Version,
   Resolver = std::make_unique<HeuristicResolver>(getASTContext());
   assert(this->Clang);
   assert(this->Action);
+}
+
+const include_cleaner::PragmaIncludes *ParsedAST::getPragmaIncludes() const {
+  if (!Preamble)
+    return nullptr;
+  return &Preamble->Pragmas;
 }
 
 std::optional<llvm::StringRef> ParsedAST::preambleVersion() const {

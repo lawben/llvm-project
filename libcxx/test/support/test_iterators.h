@@ -1005,6 +1005,84 @@ class Iterator {
 
 } // namespace adl
 
+template <class T>
+class rvalue_iterator {
+public:
+  using iterator_category = std::input_iterator_tag;
+  using iterator_concept  = std::random_access_iterator_tag;
+  using difference_type   = std::ptrdiff_t;
+  using reference         = T&&;
+  using value_type        = T;
+
+  rvalue_iterator() = default;
+  constexpr rvalue_iterator(T* it) : it_(it) {}
+
+  constexpr reference operator*() const { return std::move(*it_); }
+
+  constexpr rvalue_iterator& operator++() {
+    ++it_;
+    return *this;
+  }
+
+  constexpr rvalue_iterator operator++(int) {
+    auto tmp = *this;
+    ++it_;
+    return tmp;
+  }
+
+  constexpr rvalue_iterator& operator--() {
+    --it_;
+    return *this;
+  }
+
+  constexpr rvalue_iterator operator--(int) {
+    auto tmp = *this;
+    --it_;
+    return tmp;
+  }
+
+  constexpr rvalue_iterator operator+(difference_type n) const {
+    auto tmp = *this;
+    tmp.it += n;
+    return tmp;
+  }
+
+  constexpr friend rvalue_iterator operator+(difference_type n, rvalue_iterator iter) {
+    iter += n;
+    return iter;
+  }
+
+  constexpr rvalue_iterator operator-(difference_type n) const {
+    auto tmp = *this;
+    tmp.it -= n;
+    return tmp;
+  }
+
+  constexpr difference_type operator-(const rvalue_iterator& other) const { return it_ - other.it_; }
+
+  constexpr rvalue_iterator& operator+=(difference_type n) {
+    it_ += n;
+    return *this;
+  }
+
+  constexpr rvalue_iterator& operator-=(difference_type n) {
+    it_ -= n;
+    return *this;
+  }
+
+  constexpr reference operator[](difference_type n) const { return std::move(it_[n]); }
+
+  auto operator<=>(const rvalue_iterator&) const noexcept = default;
+
+private:
+  T* it_;
+};
+
+template <class T>
+rvalue_iterator(T*) -> rvalue_iterator<T>;
+
+static_assert(std::random_access_iterator<rvalue_iterator<int*>>);
+
 // Proxy
 // ======================================================================
 // Proxy that can wrap a value or a reference. It simulates C++23's tuple
@@ -1285,6 +1363,21 @@ static_assert(std::indirectly_readable<ProxyIterator<int*>>);
 static_assert(std::indirectly_writable<ProxyIterator<int*>, Proxy<int>>);
 static_assert(std::indirectly_writable<ProxyIterator<int*>, Proxy<int&>>);
 
+template <class Iter>
+using Cpp20InputProxyIterator = ProxyIterator<cpp20_input_iterator<Iter>>;
+
+template <class Iter>
+using ForwardProxyIterator = ProxyIterator<forward_iterator<Iter>>;
+
+template <class Iter>
+using BidirectionalProxyIterator = ProxyIterator<bidirectional_iterator<Iter>>;
+
+template <class Iter>
+using RandomAccessProxyIterator = ProxyIterator<random_access_iterator<Iter>>;
+
+template <class Iter>
+using ContiguousProxyIterator = ProxyIterator<contiguous_iterator<Iter>>;
+
 template <class BaseSent>
 struct ProxySentinel {
   BaseSent base_;
@@ -1325,23 +1418,33 @@ template <std::ranges::input_range R>
   requires std::ranges::viewable_range<R&&>
 ProxyRange(R&&) -> ProxyRange<std::views::all_t<R&&>>;
 
+#endif // TEST_STD_VER > 17
+
 namespace meta {
 template <class Ptr>
-using random_access_iterator_list = type_list<Ptr, contiguous_iterator<Ptr>, random_access_iterator<Ptr>>;
+using random_access_iterator_list =
+    type_list<Ptr,
+#if TEST_STD_VER >= 20
+              contiguous_iterator<Ptr>,
+#endif
+              random_access_iterator<Ptr> >;
 
 template <class Ptr>
 using bidirectional_iterator_list =
-    concatenate_t<random_access_iterator_list<Ptr>, type_list<bidirectional_iterator<Ptr>>>;
+    concatenate_t<random_access_iterator_list<Ptr>, type_list<bidirectional_iterator<Ptr> > >;
 
 template <class Ptr>
-using forward_iterator_list = concatenate_t<bidirectional_iterator_list<Ptr>, type_list<forward_iterator<Ptr>>>;
+using forward_iterator_list = concatenate_t<bidirectional_iterator_list<Ptr>, type_list<forward_iterator<Ptr> > >;
 
+template <class Ptr>
+using cpp17_input_iterator_list = concatenate_t<forward_iterator_list<Ptr>, type_list<cpp17_input_iterator<Ptr> > >;
+
+#if TEST_STD_VER >= 20
 template <class Ptr>
 using cpp20_input_iterator_list =
     concatenate_t<forward_iterator_list<Ptr>, type_list<cpp20_input_iterator<Ptr>, cpp17_input_iterator<Ptr>>>;
-
+#endif
 } // namespace meta
 
-#endif // TEST_STD_VER > 17
 
 #endif // SUPPORT_TEST_ITERATORS_H

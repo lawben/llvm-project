@@ -50,7 +50,6 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringSwitch.h"
-#include "llvm/ADT/Triple.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Frontend/OpenMP/OMPIRBuilder.h"
 #include "llvm/IR/CallingConv.h"
@@ -67,8 +66,10 @@
 #include "llvm/Support/ConvertUTF.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/TimeProfiler.h"
-#include "llvm/Support/X86TargetParser.h"
 #include "llvm/Support/xxhash.h"
+#include "llvm/TargetParser/Triple.h"
+#include "llvm/TargetParser/X86TargetParser.h"
+#include <optional>
 
 using namespace clang;
 using namespace CodeGen;
@@ -106,11 +107,11 @@ CodeGenModule::CodeGenModule(ASTContext &C,
                              const CodeGenOptions &CGO, llvm::Module &M,
                              DiagnosticsEngine &diags,
                              CoverageSourceInfo *CoverageInfo)
-    : Context(C), LangOpts(C.getLangOpts()), FS(std::move(FS)),
-      HeaderSearchOpts(HSO), PreprocessorOpts(PPO), CodeGenOpts(CGO),
-      TheModule(M), Diags(diags), Target(C.getTargetInfo()),
-      ABI(createCXXABI(*this)), VMContext(M.getContext()), Types(*this),
-      VTables(*this), SanitizerMD(new SanitizerMetadata(*this)) {
+    : Context(C), LangOpts(C.getLangOpts()), FS(FS), HeaderSearchOpts(HSO),
+      PreprocessorOpts(PPO), CodeGenOpts(CGO), TheModule(M), Diags(diags),
+      Target(C.getTargetInfo()), ABI(createCXXABI(*this)),
+      VMContext(M.getContext()), Types(*this), VTables(*this),
+      SanitizerMD(new SanitizerMetadata(*this)) {
 
   // Initialize the type cache.
   llvm::LLVMContext &LLVMContext = M.getContext();
@@ -184,7 +185,8 @@ CodeGenModule::CodeGenModule(ASTContext &C,
 
   if (CodeGenOpts.hasProfileClangUse()) {
     auto ReaderOrErr = llvm::IndexedInstrProfReader::create(
-        CodeGenOpts.ProfileInstrumentUsePath, CodeGenOpts.ProfileRemappingFile);
+        CodeGenOpts.ProfileInstrumentUsePath, *FS,
+        CodeGenOpts.ProfileRemappingFile);
     // We're checking for profile read errors in CompilerInvocation, so if
     // there was an error it should've already been caught. If it hasn't been
     // somehow, trip an assertion.
@@ -507,7 +509,7 @@ static void setVisibilityFromDLLStorageClass(const clang::LangOptions &LO,
 }
 
 void CodeGenModule::Release() {
-  Module *Primary = getContext().getModuleForCodeGen();
+  Module *Primary = getContext().getNamedModuleForCodeGen();
   if (CXX20ModuleInits && Primary && !Primary->isHeaderLikeModule())
     EmitModuleInitializers(Primary);
   EmitDeferred();
@@ -578,20 +580,6 @@ void CodeGenModule::Release() {
     EmitMainVoidAlias();
 
   if (getTriple().isAMDGPU()) {
-    // Emit reference of __amdgpu_device_library_preserve_asan_functions to
-    // preserve ASAN functions in bitcode libraries.
-    if (LangOpts.Sanitize.has(SanitizerKind::Address)) {
-      auto *FT = llvm::FunctionType::get(VoidTy, {});
-      auto *F = llvm::Function::Create(
-          FT, llvm::GlobalValue::ExternalLinkage,
-          "__amdgpu_device_library_preserve_asan_functions", &getModule());
-      auto *Var = new llvm::GlobalVariable(
-          getModule(), FT->getPointerTo(),
-          /*isConstant=*/true, llvm::GlobalValue::WeakAnyLinkage, F,
-          "__amdgpu_device_library_preserve_asan_functions_ptr", nullptr,
-          llvm::GlobalVariable::NotThreadLocal);
-      addCompilerUsedGlobal(Var);
-    }
     // Emit amdgpu_code_object_version module flag, which is code object version
     // times 100.
     if (getTarget().getTargetOpts().CodeObjectVersion !=
@@ -945,6 +933,10 @@ void CodeGenModule::Release() {
   if (getCodeGenOpts().SkipRaxSetup)
     getModule().addModuleFlag(llvm::Module::Override, "SkipRaxSetup", 1);
 
+  if (getContext().getTargetInfo().getMaxTLSAlign())
+    getModule().addModuleFlag(llvm::Module::Error, "MaxTLSAlign",
+                              getContext().getTargetInfo().getMaxTLSAlign());
+
   getTargetCodeGenInfo().emitTargetMetadata(*this, MangledDeclNames);
 
   EmitBackendOptionsMetadata(getCodeGenOpts());
@@ -978,7 +970,7 @@ void CodeGenModule::EmitOpenCLMetadata() {
 void CodeGenModule::EmitBackendOptionsMetadata(
     const CodeGenOptions CodeGenOpts) {
   if (getTriple().isRISCV()) {
-    getModule().addModuleFlag(llvm::Module::Error, "SmallDataLimit",
+    getModule().addModuleFlag(llvm::Module::Min, "SmallDataLimit",
                               CodeGenOpts.SmallDataLimit);
   }
 }
@@ -1725,7 +1717,11 @@ llvm::ConstantInt *CodeGenModule::CreateKCFITypeId(QualType T) {
 
   std::string OutName;
   llvm::raw_string_ostream Out(OutName);
-  getCXXABI().getMangleContext().mangleTypeName(T, Out);
+  getCXXABI().getMangleContext().mangleTypeName(
+      T, Out, getCodeGenOpts().SanitizeCfiICallNormalizeIntegers);
+
+  if (getCodeGenOpts().SanitizeCfiICallNormalizeIntegers)
+    Out << ".normalized";
 
   return llvm::ConstantInt::get(Int32Ty,
                                 static_cast<uint32_t>(llvm::xxHash64(OutName)));
@@ -3084,7 +3080,7 @@ bool CodeGenModule::MayBeEmittedEagerly(const ValueDecl *Global) {
   // we have if the level of the declare target attribute is -1. Note that we
   // check somewhere else if we should emit this at all.
   if (LangOpts.OpenMP >= 50 && !LangOpts.OpenMPSimd) {
-    llvm::Optional<OMPDeclareTargetDeclAttr *> ActiveAttr =
+    std::optional<OMPDeclareTargetDeclAttr *> ActiveAttr =
         OMPDeclareTargetDeclAttr::getActiveAttr(Global);
     if (!ActiveAttr || (*ActiveAttr)->getLevel() != (unsigned)-1)
       return false;
@@ -3317,7 +3313,8 @@ void CodeGenModule::EmitGlobal(GlobalDecl GD) {
       if (MustBeEmitted(Global))
         EmitOMPDeclareReduction(DRD);
       return;
-    } else if (auto *DMD = dyn_cast<OMPDeclareMapperDecl>(Global)) {
+    }
+    if (auto *DMD = dyn_cast<OMPDeclareMapperDecl>(Global)) {
       if (MustBeEmitted(Global))
         EmitOMPDeclareMapper(DMD);
       return;
@@ -3348,7 +3345,7 @@ void CodeGenModule::EmitGlobal(GlobalDecl GD) {
         !Context.isMSStaticDataMemberInlineDefinition(VD)) {
       if (LangOpts.OpenMP) {
         // Emit declaration of the must-be-emitted declare target variable.
-        if (llvm::Optional<OMPDeclareTargetDeclAttr::MapTypeTy> Res =
+        if (std::optional<OMPDeclareTargetDeclAttr::MapTypeTy> Res =
                 OMPDeclareTargetDeclAttr::isDeclareTargetDeclaration(VD)) {
           bool UnifiedMemoryEnabled =
               getOpenMPRuntime().hasRequiresUnifiedSharedMemory();
@@ -4686,16 +4683,17 @@ LangAS CodeGenModule::GetGlobalVarAddressSpace(const VarDecl *D) {
     return LangAS::sycl_global;
 
   if (LangOpts.CUDA && LangOpts.CUDAIsDevice) {
-    if (D && D->hasAttr<CUDAConstantAttr>())
-      return LangAS::cuda_constant;
-    else if (D && D->hasAttr<CUDASharedAttr>())
-      return LangAS::cuda_shared;
-    else if (D && D->hasAttr<CUDADeviceAttr>())
-      return LangAS::cuda_device;
-    else if (D && D->getType().isConstQualified())
-      return LangAS::cuda_constant;
-    else
-      return LangAS::cuda_device;
+    if (D) {
+      if (D->hasAttr<CUDAConstantAttr>())
+        return LangAS::cuda_constant;
+      if (D->hasAttr<CUDASharedAttr>())
+        return LangAS::cuda_shared;
+      if (D->hasAttr<CUDADeviceAttr>())
+        return LangAS::cuda_device;
+      if (D->getType().isConstQualified())
+        return LangAS::cuda_constant;
+    }
+    return LangAS::cuda_device;
   }
 
   if (LangOpts.OpenMP) {
@@ -4842,7 +4840,7 @@ void CodeGenModule::EmitGlobalVarDefinition(const VarDecl *D,
   const VarDecl *InitDecl;
   const Expr *InitExpr = D->getAnyInitializer(InitDecl);
 
-  Optional<ConstantEmitter> emitter;
+  std::optional<ConstantEmitter> emitter;
 
   // CUDA E.2.4.1 "__shared__ variables cannot have an initialization
   // as part of their declaration."  Sema has already checked for
@@ -5002,7 +5000,7 @@ void CodeGenModule::EmitGlobalVarDefinition(const VarDecl *D,
 
   CharUnits AlignVal = getContext().getDeclAlign(D);
   // Check for alignment specifed in an 'omp allocate' directive.
-  if (llvm::Optional<CharUnits> AlignValFromAllocate =
+  if (std::optional<CharUnits> AlignValFromAllocate =
           getOMPAllocateAlignment(D))
     AlignVal = *AlignValFromAllocate;
   GV->setAlignment(AlignVal.getAsAlign());
@@ -6056,7 +6054,7 @@ ConstantAddress CodeGenModule::GetAddrOfGlobalTemporary(
   LangAS AddrSpace =
       VD ? GetGlobalVarAddressSpace(VD) : MaterializedType.getAddressSpace();
 
-  Optional<ConstantEmitter> emitter;
+  std::optional<ConstantEmitter> emitter;
   llvm::Constant *InitialValue = nullptr;
   bool Constant = false;
   llvm::Type *Type;
@@ -6941,7 +6939,12 @@ CodeGenModule::CreateMetadataIdentifierImpl(QualType T, MetadataTypeMap &Map,
   if (isExternallyVisible(T->getLinkage())) {
     std::string OutName;
     llvm::raw_string_ostream Out(OutName);
-    getCXXABI().getMangleContext().mangleTypeName(T, Out);
+    getCXXABI().getMangleContext().mangleTypeName(
+        T, Out, getCodeGenOpts().SanitizeCfiICallNormalizeIntegers);
+
+    if (getCodeGenOpts().SanitizeCfiICallNormalizeIntegers)
+      Out << ".normalized";
+
     Out << Suffix;
 
     InternalId = llvm::MDString::get(getLLVMContext(), Out.str());

@@ -70,7 +70,7 @@ static lto::Config createConfig() {
   c.TimeTraceEnabled = config->timeTraceEnabled;
   c.TimeTraceGranularity = config->timeTraceGranularity;
   c.OptLevel = config->ltoo;
-  c.CGOptLevel = args::getCGOptLevel(config->ltoo);
+  c.CGOptLevel = config->ltoCgo;
   if (config->saveTemps)
     checkError(c.addSaveTemps(config->outputFile.str() + ".",
                               /*UseInputModulePath=*/true));
@@ -278,7 +278,7 @@ std::vector<ObjFile *> BitcodeCompiler::compile() {
     // not use the cached MemoryBuffer directly to ensure dsymutil does not
     // race with the cache pruner.
     StringRef objBuf;
-    std::optional<StringRef> cachePath = std::nullopt;
+    std::optional<StringRef> cachePath;
     if (files[i]) {
       objBuf = files[i]->getBuffer();
       cachePath = files[i]->getBufferIdentifier();

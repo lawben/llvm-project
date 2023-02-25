@@ -265,7 +265,8 @@ private:
 PreservedAnalyses LICMPass::run(Loop &L, LoopAnalysisManager &AM,
                                 LoopStandardAnalysisResults &AR, LPMUpdater &) {
   if (!AR.MSSA)
-    report_fatal_error("LICM requires MemorySSA (loop-mssa)");
+    report_fatal_error("LICM requires MemorySSA (loop-mssa)",
+                       /*GenCrashDiag*/false);
 
   // For the new PM, we also can't use OptimizationRemarkEmitter as an analysis
   // pass.  Function analyses need to be preserved across loop transformations
@@ -292,16 +293,17 @@ void LICMPass::printPipeline(
   static_cast<PassInfoMixin<LICMPass> *>(this)->printPipeline(
       OS, MapClassName2PassName);
 
-  OS << "<";
+  OS << '<';
   OS << (Opts.AllowSpeculation ? "" : "no-") << "allowspeculation";
-  OS << ">";
+  OS << '>';
 }
 
 PreservedAnalyses LNICMPass::run(LoopNest &LN, LoopAnalysisManager &AM,
                                  LoopStandardAnalysisResults &AR,
                                  LPMUpdater &) {
   if (!AR.MSSA)
-    report_fatal_error("LNICM requires MemorySSA (loop-mssa)");
+    report_fatal_error("LNICM requires MemorySSA (loop-mssa)",
+                       /*GenCrashDiag*/false);
 
   // For the new PM, we also can't use OptimizationRemarkEmitter as an analysis
   // pass.  Function analyses need to be preserved across loop transformations
@@ -332,9 +334,9 @@ void LNICMPass::printPipeline(
   static_cast<PassInfoMixin<LNICMPass> *>(this)->printPipeline(
       OS, MapClassName2PassName);
 
-  OS << "<";
+  OS << '<';
   OS << (Opts.AllowSpeculation ? "" : "no-") << "allowspeculation";
-  OS << ">";
+  OS << '>';
 }
 
 char LegacyLICMPass::ID = 0;

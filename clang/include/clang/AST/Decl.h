@@ -35,7 +35,6 @@
 #include "clang/Basic/Visibility.h"
 #include "llvm/ADT/APSInt.h"
 #include "llvm/ADT/ArrayRef.h"
-#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/PointerIntPair.h"
 #include "llvm/ADT/PointerUnion.h"
 #include "llvm/ADT/StringRef.h"
@@ -46,6 +45,7 @@
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -437,7 +437,7 @@ public:
 
   /// If visibility was explicitly specified for this
   /// declaration, return that visibility.
-  Optional<Visibility>
+  std::optional<Visibility>
   getExplicitVisibility(ExplicitVisibilityKind kind) const;
 
   /// True if the computed linkage is valid. Used for consistency
@@ -2474,7 +2474,7 @@ public:
   /// If this function is an allocation/deallocation function that takes
   /// the `std::nothrow_t` tag, return true through IsNothrow,
   bool isReplaceableGlobalAllocationFunction(
-      Optional<unsigned> *AlignmentParam = nullptr,
+      std::optional<unsigned> *AlignmentParam = nullptr,
       bool *IsNothrow = nullptr) const;
 
   /// Determine if this function provides an inline implementation of a builtin.
@@ -3071,6 +3071,10 @@ public:
   /// zero-length bit-field or a field of empty class type with the
   /// [[no_unique_address]] attribute.
   bool isZeroSize(const ASTContext &Ctx) const;
+
+  /// Determine if this field is of potentially-overlapping class type, that
+  /// is, subobject with the [[no_unique_address]] attribute
+  bool isPotentiallyOverlapping() const;
 
   /// Get the kind of (C++11) default member initializer that this field has.
   InClassInitStyle getInClassInitStyle() const {
@@ -3998,6 +4002,7 @@ class RecordDecl : public TagDecl {
   // to save some space. Use the provided accessors to access it.
 public:
   friend class DeclContext;
+  friend class ASTDeclReader;
   /// Enum that represents the different ways arguments are passed to and
   /// returned from function calls. This takes into account the target-specific
   /// and version-specific rules along with the rules determined by the
@@ -4253,9 +4258,16 @@ public:
   /// nullptr is returned if no named data member exists.
   const FieldDecl *findFirstNamedDataMember() const;
 
+  /// Get precomputed ODRHash or add a new one.
+  unsigned getODRHash();
+
 private:
   /// Deserialize just the fields.
   void LoadFieldsFromExternalStorage() const;
+
+  /// True if a valid hash is stored in ODRHash.
+  bool hasODRHash() const { return RecordDeclBits.ODRHash; }
+  void setODRHash(unsigned Hash) { RecordDeclBits.ODRHash = Hash; }
 };
 
 class FileScopeAsmDecl : public Decl {
@@ -4699,7 +4711,7 @@ public:
   static bool classofKind(Kind K) { return K == Import; }
 };
 
-/// Represents a C++ Modules TS module export declaration.
+/// Represents a standard C++ module export declaration.
 ///
 /// For example:
 /// \code

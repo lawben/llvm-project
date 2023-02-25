@@ -822,7 +822,9 @@ public:
   /// \brief Given a branch instruction try to get the address the branch
   /// targets. Return true on success, and the address in Target.
   virtual bool evaluateBranch(const MCInst &Inst, uint64_t Addr, uint64_t Size,
-                              uint64_t &Target) const;
+                              uint64_t &Target) const {
+    return Analysis->evaluateBranch(Inst, Addr, Size, Target);
+  }
 
   /// Return true if one of the operands of the \p Inst instruction uses
   /// PC-relative addressing.
@@ -852,6 +854,15 @@ public:
     return false;
   }
 
+  struct X86MemOperand {
+    unsigned BaseRegNum;
+    int64_t ScaleImm;
+    unsigned IndexRegNum;
+    int64_t DispImm;
+    unsigned SegRegNum;
+    const MCExpr *DispExpr = nullptr;
+  };
+
   /// Given an instruction with (compound) memory operand, evaluate and return
   /// the corresponding values. Note that the operand could be in any position,
   /// but there is an assumption there's only one compound memory operand.
@@ -860,13 +871,10 @@ public:
   ///
   /// Since a Displacement field could be either an immediate or an expression,
   /// the function sets either \p DispImm or \p DispExpr value.
-  virtual bool
-  evaluateX86MemoryOperand(const MCInst &Inst, unsigned *BaseRegNum,
-                           int64_t *ScaleImm, unsigned *IndexRegNum,
-                           int64_t *DispImm, unsigned *SegmentRegNum,
-                           const MCExpr **DispExpr = nullptr) const {
+  virtual std::optional<X86MemOperand>
+  evaluateX86MemoryOperand(const MCInst &Inst) const {
     llvm_unreachable("not implemented");
-    return false;
+    return std::nullopt;
   }
 
   /// Given an instruction with memory addressing attempt to statically compute

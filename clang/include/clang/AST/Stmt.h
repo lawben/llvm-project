@@ -36,6 +36,7 @@
 #include <cassert>
 #include <cstddef>
 #include <iterator>
+#include <optional>
 #include <string>
 
 namespace llvm {
@@ -977,7 +978,7 @@ protected:
     SourceLocation RequiresKWLoc;
   };
 
-  //===--- C++ Coroutines TS bitfields classes ---===//
+  //===--- C++ Coroutines bitfields classes ---===//
 
   class CoawaitExprBitfields {
     friend class CoawaitExpr;
@@ -1081,7 +1082,7 @@ protected:
     LambdaExprBitfields LambdaExprBits;
     RequiresExprBitfields RequiresExprBits;
 
-    // C++ Coroutines TS expressions
+    // C++ Coroutines expressions
     CoawaitExprBitfields CoawaitBits;
 
     // Obj-C Expressions
@@ -2148,8 +2149,8 @@ public:
 
   /// If this is an 'if constexpr', determine which substatement will be taken.
   /// Otherwise, or if the condition is value-dependent, returns std::nullopt.
-  Optional<const Stmt*> getNondiscardedCase(const ASTContext &Ctx) const;
-  Optional<Stmt *> getNondiscardedCase(const ASTContext &Ctx);
+  std::optional<const Stmt *> getNondiscardedCase(const ASTContext &Ctx) const;
+  std::optional<Stmt *> getNondiscardedCase(const ASTContext &Ctx);
 
   bool isObjCAvailabilityCheck() const;
 

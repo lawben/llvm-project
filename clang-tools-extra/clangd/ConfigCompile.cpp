@@ -431,16 +431,24 @@ struct FragmentCompiler {
           });
 
     if (F.UnusedIncludes)
-      if (auto Val = compileEnum<Config::UnusedIncludesPolicy>(
-                         "UnusedIncludes", **F.UnusedIncludes)
-                         .map("Strict", Config::UnusedIncludesPolicy::Strict)
-                         .map("None", Config::UnusedIncludesPolicy::None)
-                         .value())
+      if (auto Val =
+              compileEnum<Config::UnusedIncludesPolicy>("UnusedIncludes",
+                                                        **F.UnusedIncludes)
+                  .map("Strict", Config::UnusedIncludesPolicy::Strict)
+                  .map("Experiment", Config::UnusedIncludesPolicy::Experiment)
+                  .map("None", Config::UnusedIncludesPolicy::None)
+                  .value())
         Out.Apply.push_back([Val](const Params &, Config &C) {
           C.Diagnostics.UnusedIncludes = *Val;
         });
-    compile(std::move(F.Includes));
+    if (F.AllowStalePreamble) {
+      if (auto Val = F.AllowStalePreamble)
+        Out.Apply.push_back([Val](const Params &, Config &C) {
+          C.Diagnostics.AllowStalePreamble = **Val;
+        });
+    }
 
+    compile(std::move(F.Includes));
     compile(std::move(F.ClangTidy));
   }
 
