@@ -20446,7 +20446,9 @@ static SDValue tryToWidenSetCCOperands(SDNode *Op, SelectionDAG &DAG) {
                      Op0ExtV, Op1ExtV, Op->getOperand(2));
 }
 
-// TODO(lawben): Added this
+// When performing a vector compare with n elements followed by a bitcast to
+// <n x i1>, we can use a trick that extracts the i^th bit from the i^th
+// element and then performs a vector add to get a scalar bitmask.
 static SDValue
 combineVectorCompareAndBitcast(SDNode *N, TargetLowering::DAGCombinerInfo &DCI,
                                SelectionDAG &DAG) {
@@ -20459,9 +20461,6 @@ combineVectorCompareAndBitcast(SDNode *N, TargetLowering::DAGCombinerInfo &DCI,
   assert(LHS.getValueType() == RHS.getValueType());
   EVT VecVT = LHS.getValueType();
   EVT ElementType = VecVT.getVectorElementType();
-
-  if (!N->hasOneUse())
-    return SDValue();
 
   if (VecVT != MVT::v2i64 && VecVT != MVT::v2i32 && VecVT != MVT::v4i32 &&
       VecVT != MVT::v4i16 && VecVT != MVT::v8i16 && VecVT != MVT::v8i8 &&
@@ -20520,7 +20519,8 @@ combineVectorCompareAndBitcast(SDNode *N, TargetLowering::DAGCombinerInfo &DCI,
         DAG.getNode(ISD::VECREDUCE_ADD, DL, ElementType, RepresentativeBits);
   }
 
-  assert(VectorBits && "No DAG generated for unsupported vector");
+  if (!N->hasOneUse())
+    return SDValue();
 
   // Check chain of uses to see if the compare is followed by a bitcast.
   SDNode *User = *N->use_begin();
