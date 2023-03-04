@@ -2,6 +2,8 @@
 ; RUN: llc -mtriple=aarch64-apple-darwin -mattr=+neon -verify-machineinstrs < %s | FileCheck %s
 
 ; Basic tests from input vector to bitmask
+; IR generated from clang for:
+; __builtin_convertvector + reinterpret_cast<uint16&>
 
 define i16 @convert_to_bitmask16(<16 x i8> %vec) {
 ; Bits used in mask
@@ -113,4 +115,3 @@ define i16 @convert_to_bitmask2(<2 x i64> %vec) {
   %extended_bitmask = zext i8 %bitmask to i16
   ret i16 %extended_bitmask
 }
-
