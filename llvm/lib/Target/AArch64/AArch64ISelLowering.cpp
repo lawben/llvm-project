@@ -1211,6 +1211,11 @@ AArch64TargetLowering::AArch64TargetLowering(const TargetMachine &TM,
 
     setTruncStoreAction(MVT::v4i16, MVT::v4i8, Custom);
 
+    setTruncStoreAction(MVT::v16i8, MVT::v16i1, Custom);
+    setTruncStoreAction(MVT::v8i16, MVT::v8i1, Custom);
+    setTruncStoreAction(MVT::v4i32, MVT::v4i1, Custom);
+    setTruncStoreAction(MVT::v2i64, MVT::v2i1, Custom);
+
     setLoadExtAction(ISD::EXTLOAD,  MVT::v4i16, MVT::v4i8, Custom);
     setLoadExtAction(ISD::SEXTLOAD, MVT::v4i16, MVT::v4i8, Custom);
     setLoadExtAction(ISD::ZEXTLOAD, MVT::v4i16, MVT::v4i8, Custom);
@@ -19532,6 +19537,115 @@ static SDValue performLOADCombine(SDNode *N,
   return DAG.getMergeValues({ExtractSubVector, TokenFactor}, DL);
 }
 
+// When performing a vector compare with n elements followed by some form of
+// truncation/casting to <n x i1>, we can use a trick that extracts the i^th
+// bit from the i^th element and then performs a vector add to get a scalar
+// bitmask.
+static SDValue vectorCompareToBitVector(SDNode *N, SelectionDAG &DAG) {
+  EVT VT = N->getValueType(0);
+  assert(VT.isVector() && "Should be a vector type");
+  assert(N->getOpcode() == ISD::SETCC && "Must be vector compare.");
+
+  SDValue LHS = N->getOperand(0);
+  SDValue RHS = N->getOperand(1);
+  assert(LHS.getValueType() == RHS.getValueType());
+  EVT VecVT = LHS.getValueType();
+  EVT ElementType = VecVT.getVectorElementType();
+
+  if (VecVT != MVT::v2i64 && VecVT != MVT::v2i32 && VecVT != MVT::v4i32 &&
+      VecVT != MVT::v4i16 && VecVT != MVT::v8i16 && VecVT != MVT::v8i8 &&
+      VecVT != MVT::v16i8)
+    return SDValue();
+
+  SDLoc DL(N);
+  SDValue ComparisonResult = DAG.getNode(N->getOpcode(), DL, VecVT, LHS, RHS,
+                                         N->getOperand(2), N->getFlags());
+
+  SDValue VectorBits;
+  if (VecVT == MVT::v16i8) {
+    // v16i8 is a special case, as we need to split it into two halves and
+    // combine, perform the mask+addition twice, and then combine them.
+    SmallVector<SDValue, 16> MaskConstants;
+    for (unsigned Half = 0; Half < 2; ++Half) {
+      for (unsigned MaskBit = 1; MaskBit <= 128; MaskBit *= 2) {
+        MaskConstants.push_back(DAG.getConstant(MaskBit, DL, MVT::i32));
+      }
+    }
+    SDValue Mask = DAG.getNode(ISD::BUILD_VECTOR, DL, VecVT, MaskConstants);
+    SDValue RepresentativeBits =
+        DAG.getNode(ISD::AND, DL, VecVT, ComparisonResult, Mask);
+
+    EVT HalfVT = VecVT.getHalfNumVectorElementsVT(*DAG.getContext());
+    unsigned NumElementsInHalf = HalfVT.getVectorNumElements();
+
+    SDValue LowHalf =
+        DAG.getNode(ISD::EXTRACT_SUBVECTOR, DL, HalfVT, RepresentativeBits,
+                    DAG.getConstant(0, DL, MVT::i64));
+    SDValue HighHalf =
+        DAG.getNode(ISD::EXTRACT_SUBVECTOR, DL, HalfVT, RepresentativeBits,
+                    DAG.getConstant(NumElementsInHalf, DL, MVT::i64));
+
+    SDValue ReducedLowBits =
+        DAG.getNode(ISD::VECREDUCE_ADD, DL, MVT::i16, LowHalf);
+    SDValue ReducedHighBits =
+        DAG.getNode(ISD::VECREDUCE_ADD, DL, MVT::i16, HighHalf);
+
+    SDValue ShiftedHighBits =
+        DAG.getNode(ISD::SHL, DL, MVT::i16, ReducedHighBits,
+                    DAG.getConstant(NumElementsInHalf, DL, MVT::i32));
+    VectorBits =
+        DAG.getNode(ISD::OR, DL, MVT::i16, ShiftedHighBits, ReducedLowBits);
+  } else {
+    SmallVector<SDValue, 16> MaskConstants;
+    unsigned MaxBitMask = 1u << (VecVT.getVectorNumElements() - 1);
+    for (unsigned MaskBit = 1; MaskBit <= MaxBitMask; MaskBit *= 2) {
+      MaskConstants.push_back(DAG.getConstant(MaskBit, DL, ElementType));
+    }
+
+    SDValue Mask = DAG.getNode(ISD::BUILD_VECTOR, DL, VecVT, MaskConstants);
+    SDValue RepresentativeBits =
+        DAG.getNode(ISD::AND, DL, VecVT, ComparisonResult, Mask);
+    VectorBits =
+        DAG.getNode(ISD::VECREDUCE_ADD, DL, ElementType, RepresentativeBits);
+  }
+
+  return VectorBits;
+}
+
+static SDValue combineVectorCompareAndTruncateStore(SelectionDAG &DAG,
+                                                    StoreSDNode *Store) {
+  if (!Store->isTruncatingStore())
+    return SDValue();
+
+  SDValue VecCompareOp = Store->getValue();
+  EVT VT = VecCompareOp.getValueType();
+  EVT MemVT = Store->getMemoryVT();
+
+  if (!MemVT.isVector() || !VT.isVector())
+    return SDValue();
+
+  // We only want to combine truncating stores to single bits.
+  if (MemVT.getVectorElementType() != MVT::i1 ||
+      MemVT.getVectorNumElements() != VT.getVectorNumElements())
+    return SDValue();
+
+  // We can only apply this if we know that the input is all 1s or all 0s,
+  // which is the case for vector comparisons.
+  if (VecCompareOp->getOpcode() != ISD::SETCC)
+    return SDValue();
+
+  SDValue VectorBits = vectorCompareToBitVector(VecCompareOp.getNode(), DAG);
+  if (!VectorBits)
+    return SDValue();
+
+  SDLoc DL(Store);
+  EVT StoreVT =
+      EVT::getIntegerVT(*DAG.getContext(), MemVT.getStoreSizeInBits());
+  SDValue ExtendedBits = DAG.getZExtOrTrunc(VectorBits, DL, StoreVT);
+  return DAG.getStore(Store->getChain(), DL, ExtendedBits, Store->getBasePtr(),
+                      Store->getMemOperand());
+}
+
 static SDValue performSTORECombine(SDNode *N,
                                    TargetLowering::DAGCombinerInfo &DCI,
                                    SelectionDAG &DAG,
@@ -19568,6 +19682,9 @@ static SDValue performSTORECombine(SDNode *N,
     return SDValue(N, 0);
 
   if (SDValue Store = foldTruncStoreOfExt(DAG, N))
+    return Store;
+
+  if (SDValue Store = combineVectorCompareAndTruncateStore(DAG, ST))
     return Store;
 
   return SDValue();
@@ -20450,111 +20567,49 @@ static SDValue tryToWidenSetCCOperands(SDNode *Op, SelectionDAG &DAG) {
                      Op0ExtV, Op1ExtV, Op->getOperand(2));
 }
 
-// When performing a vector compare with n elements followed by a bitcast to
-// <n x i1>, we can use a trick that extracts the i^th bit from the i^th
-// element and then performs a vector add to get a scalar bitmask.
 static SDValue
 combineVectorCompareAndBitcast(SDNode *N, TargetLowering::DAGCombinerInfo &DCI,
                                SelectionDAG &DAG) {
-  EVT VT = N->getValueType(0);
-  if (!VT.isVector() || VT.getVectorElementType() != MVT::i1)
-    return SDValue();
-
-  SDValue LHS = N->getOperand(0);
-  SDValue RHS = N->getOperand(1);
-  assert(LHS.getValueType() == RHS.getValueType());
-  EVT VecVT = LHS.getValueType();
-  EVT ElementType = VecVT.getVectorElementType();
-
-  if (VecVT != MVT::v2i64 && VecVT != MVT::v2i32 && VecVT != MVT::v4i32 &&
-      VecVT != MVT::v4i16 && VecVT != MVT::v8i16 && VecVT != MVT::v8i8 &&
-      VecVT != MVT::v16i8)
-    return SDValue();
-
   SDLoc DL(N);
-  SDValue ComparisonResult = DAG.getNode(N->getOpcode(), DL, VecVT, LHS, RHS,
-                                         N->getOperand(2), N->getFlags());
+  EVT VecVT = N->getValueType(0);
+  if (!VecVT.isVector() || VecVT.getVectorElementType() != MVT::i1)
+    return SDValue();
 
-  SDValue VectorBits;
-  if (VecVT == MVT::v16i8) {
-    // v16i8 is a special case, as we need to split it into two halves and
-    // combine, perform the mask+addition twice, and then combine them.
-    SmallVector<SDValue, 16> MaskConstants;
-    for (unsigned Half = 0; Half < 2; ++Half) {
-      for (unsigned MaskBit = 1; MaskBit <= 128; MaskBit *= 2) {
-        MaskConstants.push_back(DAG.getConstant(MaskBit, DL, MVT::i32));
-      }
-    }
-    SDValue Mask = DAG.getNode(ISD::BUILD_VECTOR, DL, VecVT, MaskConstants);
-    SDValue RepresentativeBits =
-        DAG.getNode(ISD::AND, DL, VecVT, ComparisonResult, Mask);
-
-    EVT HalfVT = VecVT.getHalfNumVectorElementsVT(*DAG.getContext());
-    unsigned NumElementsInHalf = HalfVT.getVectorNumElements();
-
-    SDValue LowHalf =
-        DAG.getNode(ISD::EXTRACT_SUBVECTOR, DL, HalfVT, RepresentativeBits,
-                    DAG.getConstant(0, DL, MVT::i64));
-    SDValue HighHalf =
-        DAG.getNode(ISD::EXTRACT_SUBVECTOR, DL, HalfVT, RepresentativeBits,
-                    DAG.getConstant(NumElementsInHalf, DL, MVT::i64));
-
-    SDValue ReducedLowBits =
-        DAG.getNode(ISD::VECREDUCE_ADD, DL, MVT::i16, LowHalf);
-    SDValue ReducedHighBits =
-        DAG.getNode(ISD::VECREDUCE_ADD, DL, MVT::i16, HighHalf);
-
-    SDValue ShiftedHighBits =
-        DAG.getNode(ISD::SHL, DL, MVT::i16, ReducedHighBits,
-                    DAG.getConstant(NumElementsInHalf, DL, MVT::i32));
-    VectorBits =
-        DAG.getNode(ISD::OR, DL, MVT::i16, ShiftedHighBits, ReducedLowBits);
-  } else {
-    SmallVector<SDValue, 16> MaskConstants;
-    unsigned MaxBitMask = 1u << (VecVT.getVectorNumElements() - 1);
-    for (unsigned MaskBit = 1; MaskBit <= MaxBitMask; MaskBit *= 2) {
-      MaskConstants.push_back(DAG.getConstant(MaskBit, DL, ElementType));
-    }
-
-    SDValue Mask = DAG.getNode(ISD::BUILD_VECTOR, DL, VecVT, MaskConstants);
-    SDValue RepresentativeBits =
-        DAG.getNode(ISD::AND, DL, VecVT, ComparisonResult, Mask);
-    VectorBits =
-        DAG.getNode(ISD::VECREDUCE_ADD, DL, ElementType, RepresentativeBits);
-  }
+  SDValue VectorBits = vectorCompareToBitVector(N, DAG);
+  if (!VectorBits)
+    return SDValue();
 
   // Check chain of uses to see if the compare is followed by a bitcast.
+  bool CombinedBitcast = false;
   for (SDNode *User : N->uses()) {
-    // For v4i1 and v2i1, we get a vector concatenation to fill the remaining
-    // bits before bitcasting. This op can be skipped if we replace the user
-    // chain. We are defensive here to avoid producing wrong code in case we
-    // are not aware of the bitcast pattern. This pattern is generated by
-    // clang, e.g., when using __builtin_convertvector().
+    // When using Clang's __builtin_convertvector(), for v4i1 and v2i1, we get a
+    // vector concatenation to fill the remaining bits before bitcasting. This
+    // op can be skipped if we replace the user chain. We are defensive here to
+    // avoid producing wrong code in case we are not aware of the pattern.
     if (User->getOpcode() == ISD::CONCAT_VECTORS) {
-      if (!User->hasOneUse() || User->getOperand(0).getValueType() != VT)
+      if (!User->hasOneUse())
         return SDValue();
 
       // The vector with the relevant bits must be the first vector.
-      if (User->getOperand(0) != SDValue(N, 0))
+      if (User->getOperand(0) != SDValue(N, 0) ||
+          !User->getOperand(1).isUndef())
         return SDValue();
-
-      // The other vectors must be undef.
-      for (unsigned I = 1; I < User->getNumOperands(); ++I)
-        if (!User->getOperand(I).isUndef())
-          return SDValue();
 
       User = *User->use_begin();
     }
 
+    // The comparison result may have other users, but we only want to replace
+    // the explicit bitcast and let other passes combine other instructions.
     if (User->getOpcode() != ISD::BITCAST)
       continue;
 
     EVT TargetVT = User->getValueType(0);
     SDValue BitcastedResult = DAG.getZExtOrTrunc(VectorBits, DL, TargetVT);
     DCI.CombineTo(User, BitcastedResult);
+    CombinedBitcast = true;
   }
 
-  return SDValue(N, 0);
+  return CombinedBitcast ? SDValue(N, 0) : SDValue();
 }
 
 static SDValue performSETCCCombine(SDNode *N,
