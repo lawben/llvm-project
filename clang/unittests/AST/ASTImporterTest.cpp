@@ -259,6 +259,10 @@ TEST_P(ImportExpr, ImportSourceLocExpr) {
              Lang_CXX03, Verifier,
              functionDecl(hasDescendant(
                  sourceLocExpr(hasBuiltinStr("__builtin_FILE")))));
+  testImport("void declToImport() { (void)__builtin_FILE_NAME(); }", Lang_CXX03,
+             "", Lang_CXX03, Verifier,
+             functionDecl(hasDescendant(
+                 sourceLocExpr(hasBuiltinStr("__builtin_FILE_NAME")))));
   testImport("void declToImport() { (void)__builtin_COLUMN(); }", Lang_CXX03,
              "", Lang_CXX03, Verifier,
              functionDecl(hasDescendant(
@@ -8436,6 +8440,42 @@ TEST_P(ASTImporterOptionSpecificTestBase, ImportCorrectTemplateName) {
   TemplateDecl *Templ2 =
       Spec2->getTemplateArgs()[0].getAsTemplate().getAsTemplateDecl();
   EXPECT_EQ(Templ1, Templ2);
+}
+
+TEST_P(ASTImporterOptionSpecificTestBase, VaListC) {
+  Decl *FromTU = getTuDecl(R"(typedef __builtin_va_list va_list;)", Lang_C99);
+
+  auto *FromVaList = FirstDeclMatcher<TypedefDecl>().match(
+      FromTU, typedefDecl(hasName("va_list")));
+  ASSERT_TRUE(FromVaList);
+
+  auto *ToVaList = Import(FromVaList, Lang_C99);
+  ASSERT_TRUE(ToVaList);
+
+  auto *ToBuiltinVaList = FirstDeclMatcher<TypedefDecl>().match(
+      ToAST->getASTContext().getTranslationUnitDecl(),
+      typedefDecl(hasName("__builtin_va_list")));
+
+  ASSERT_TRUE(ToAST->getASTContext().hasSameType(
+      ToVaList->getUnderlyingType(), ToBuiltinVaList->getUnderlyingType()));
+}
+
+TEST_P(ASTImporterOptionSpecificTestBase, VaListCpp) {
+  Decl *FromTU = getTuDecl(R"(typedef __builtin_va_list va_list;)", Lang_CXX03);
+
+  auto *FromVaList = FirstDeclMatcher<TypedefDecl>().match(
+      FromTU, typedefDecl(hasName("va_list")));
+  ASSERT_TRUE(FromVaList);
+
+  auto *ToVaList = Import(FromVaList, Lang_CXX03);
+  ASSERT_TRUE(ToVaList);
+
+  auto *ToBuiltinVaList = FirstDeclMatcher<TypedefDecl>().match(
+      ToAST->getASTContext().getTranslationUnitDecl(),
+      typedefDecl(hasName("__builtin_va_list")));
+
+  ASSERT_TRUE(ToAST->getASTContext().hasSameType(
+      ToVaList->getUnderlyingType(), ToBuiltinVaList->getUnderlyingType()));
 }
 
 INSTANTIATE_TEST_SUITE_P(ParameterizedTests, ASTImporterLookupTableTest,
