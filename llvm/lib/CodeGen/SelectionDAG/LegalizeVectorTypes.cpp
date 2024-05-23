@@ -2411,8 +2411,6 @@ void DAGTypeLegalizer::SplitVecRes_MASKED_COMPRESS(SDNode *N, SDValue &Lo,
       MF, cast<FrameIndexSDNode>(StackPtr.getNode())->getIndex());
 
   // We store LoVec and then insert HiVec starting at offset=|1s| in LoMask.
-  EVT PtrVT =  StackPtr.getValueType();
-  EVT ScalarVT = VecVT.getScalarType();
   SDValue WideMask = DAG.getNode(ISD::ZERO_EXTEND, DL, LoVT, LoMask);
   SDValue Offset = DAG.getNode(ISD::VECREDUCE_ADD, DL, MVT::i32, WideMask);
   Offset = TLI.getVectorElementPointer(DAG, StackPtr, VecVT, Offset);

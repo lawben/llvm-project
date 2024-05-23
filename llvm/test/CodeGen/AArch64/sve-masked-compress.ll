@@ -168,24 +168,22 @@ define <vscale x 8 x i32> @test_compress_large(<vscale x 8 x i32> %vec, <vscale 
 ; CHECK-NEXT:    addvl sp, sp, #-2
 ; CHECK-NEXT:    .cfi_escape 0x0f, 0x0c, 0x8f, 0x00, 0x11, 0x10, 0x22, 0x11, 0x10, 0x92, 0x2e, 0x00, 0x1e, 0x22 // sp + 16 + 16 * VG
 ; CHECK-NEXT:    .cfi_offset w29, -16
-; CHECK-NEXT:    punpklo p2.h, p0.b
+; CHECK-NEXT:    punpklo p1.h, p0.b
 ; CHECK-NEXT:    cnth x9
-; CHECK-NEXT:    ptrue p1.s
+; CHECK-NEXT:    ptrue p2.s
 ; CHECK-NEXT:    sub x9, x9, #1
-; CHECK-NEXT:    mov z2.s, p2/z, #1 // =0x1
+; CHECK-NEXT:    mov z2.s, p1/z, #1 // =0x1
 ; CHECK-NEXT:    punpkhi p0.h, p0.b
-; CHECK-NEXT:    compact z0.s, p2, z0.s
-; CHECK-NEXT:    compact z1.s, p0, z1.s
-; CHECK-NEXT:    uaddv d2, p1, z2.s
 ; CHECK-NEXT:    st1w { z0.s }, p1, [sp]
+; CHECK-NEXT:    uaddv d2, p2, z2.s
 ; CHECK-NEXT:    fmov x8, d2
 ; CHECK-NEXT:    and x8, x8, #0xffffffff
 ; CHECK-NEXT:    cmp x8, x9
 ; CHECK-NEXT:    csel x8, x8, x9, lo
 ; CHECK-NEXT:    mov x9, sp
-; CHECK-NEXT:    st1w { z1.s }, p1, [x9, x8, lsl #2]
-; CHECK-NEXT:    ld1w { z0.s }, p1/z, [sp]
-; CHECK-NEXT:    ld1w { z1.s }, p1/z, [sp, #1, mul vl]
+; CHECK-NEXT:    st1w { z1.s }, p0, [x9, x8, lsl #2]
+; CHECK-NEXT:    ld1w { z0.s }, p2/z, [sp]
+; CHECK-NEXT:    ld1w { z1.s }, p2/z, [sp, #1, mul vl]
 ; CHECK-NEXT:    addvl sp, sp, #2
 ; CHECK-NEXT:    ldr x29, [sp], #16 // 8-byte Folded Reload
 ; CHECK-NEXT:    ret
@@ -219,8 +217,22 @@ define <vscale x 4 x i32> @test_compress_undef_mask(<vscale x 4 x i32> %ignore, 
     ret <vscale x 4 x i32> %out
 }
 
-;define void @test_compress_store_nxv16i8(<vscale x 16 x i8> %vec, <vscale x 16 x i1> %mask, ptr %ptr) {
-;    %out = call <vscale x 16 x i8> @llvm.masked.compress(<vscale x 16 x i8> %vec, <vscale x 16 x i1> %mask)
-;    store <vscale x 16 x i8> %out, ptr %ptr
-;    ret void
-;}
+define void @test_combine_compress_store_nxv16i8(<vscale x 16 x i8> %vec, <vscale x 16 x i1> %mask, ptr %ptr) {
+; CHECK-LABEL: test_combine_compress_store_nxv16i8:
+; CHECK:       // %bb.0:
+; CHECK-NEXT:    st1b { z0.b }, p0, [x0]
+; CHECK-NEXT:    ret
+    %out = call <vscale x 16 x i8> @llvm.masked.compress(<vscale x 16 x i8> %vec, <vscale x 16 x i1> %mask)
+    store <vscale x 16 x i8> %out, ptr %ptr
+    ret void
+}
+
+define void @test_combine_compress_store_nxv4i32(<vscale x 4 x i32> %vec, <vscale x 4 x i1> %mask, ptr %ptr) {
+; CHECK-LABEL: test_combine_compress_store_nxv4i32:
+; CHECK:       // %bb.0:
+; CHECK-NEXT:    st1w { z0.s }, p0, [x0]
+; CHECK-NEXT:    ret
+    %out = call <vscale x 4 x i32> @llvm.masked.compress(<vscale x 4 x i32> %vec, <vscale x 4 x i1> %mask)
+    store <vscale x 4 x i32> %out, ptr %ptr
+    ret void
+}

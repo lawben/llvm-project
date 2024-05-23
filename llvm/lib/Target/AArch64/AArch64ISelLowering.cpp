@@ -6304,7 +6304,6 @@ SDValue AArch64TargetLowering::LowerMCOMPRESS(SDValue Op, SelectionDAG &DAG) con
   SDValue Mask = Op.getOperand(1);
   const EVT VecVT = Vec.getValueType();
   const EVT MaskVT = Mask.getValueType();
-  const EVT ElmtVT = VecVT.getVectorElementType();
 
   // We currently only have a custom lowering for scalable vectors.
   if (!VecVT.isScalableVector())
@@ -22563,6 +22562,25 @@ static SDValue combineI8TruncStore(StoreSDNode *ST, SelectionDAG &DAG,
   return Chain;
 }
 
+static SDValue combineMCOMPRESSStore(SelectionDAG &DAG,
+                                     StoreSDNode *Store) {
+  // If the regular store is preceded by an MCOMPRESS, we can combine them into
+  // a compressing store for scalable vectors in SVE.
+  SDValue VecOp = Store->getValue();
+  EVT VecVT = VecOp.getValueType();
+  if (VecOp.getOpcode() != ISD::MCOMPRESS || !VecVT.isScalableVector())
+    return SDValue();
+
+  SDLoc DL(Store);
+  SDValue Vec = VecOp.getOperand(0);
+  SDValue Mask = VecOp.getOperand(1);
+
+  return DAG.getMaskedStore(
+      Store->getChain(), DL, Vec, Store->getBasePtr(), DAG.getUNDEF(MVT::i64),
+      Mask, Store->getMemoryVT(), Store->getMemOperand(), ISD::UNINDEXED,
+      Store->isTruncatingStore(), /*IsCompressing=*/true);
+}
+
 static SDValue performSTORECombine(SDNode *N,
                                    TargetLowering::DAGCombinerInfo &DCI,
                                    SelectionDAG &DAG,
@@ -22605,6 +22623,9 @@ static SDValue performSTORECombine(SDNode *N,
     return Store;
 
   if (SDValue Store = combineBoolVectorAndTruncateStore(DAG, ST))
+    return Store;
+
+  if (SDValue Store = combineMCOMPRESSStore(DAG, ST))
     return Store;
 
   if (ST->isTruncatingStore()) {
