@@ -6298,7 +6298,8 @@ SDValue AArch64TargetLowering::LowerMSCATTER(SDValue Op,
   return Op;
 }
 
-SDValue AArch64TargetLowering::LowerMCOMPRESS(SDValue Op, SelectionDAG &DAG) const {
+SDValue AArch64TargetLowering::LowerMCOMPRESS(SDValue Op,
+                                              SelectionDAG &DAG) const {
   SDLoc DL(Op);
   SDValue Vec = Op.getOperand(0);
   SDValue Mask = Op.getOperand(1);
@@ -6347,9 +6348,10 @@ SDValue AArch64TargetLowering::LowerMCOMPRESS(SDValue Op, SelectionDAG &DAG) con
 
   // TODO: I don't think we need this, as hte mak should always be vNi1.
   if (MaskVT.getVectorElementType().getSizeInBits() > 1)
-    Mask = DAG.getNode(ISD::TRUNCATE, DL, MaskVT.changeVectorElementType(MVT::i1), Mask);
+    Mask = DAG.getNode(ISD::TRUNCATE, DL,
+                       MaskVT.changeVectorElementType(MVT::i1), Mask);
 
-  SDValue Compressed =  DAG.getNode(
+  SDValue Compressed = DAG.getNode(
       ISD::INTRINSIC_WO_CHAIN, DL, Vec.getValueType(),
       DAG.getConstant(Intrinsic::aarch64_sve_compact, DL, MVT::i64), Mask, Vec);
 
@@ -22562,8 +22564,7 @@ static SDValue combineI8TruncStore(StoreSDNode *ST, SelectionDAG &DAG,
   return Chain;
 }
 
-static SDValue combineMCOMPRESSStore(SelectionDAG &DAG,
-                                     StoreSDNode *Store) {
+static SDValue combineMCOMPRESSStore(SelectionDAG &DAG, StoreSDNode *Store) {
   // If the regular store is preceded by an MCOMPRESS, we can combine them into
   // a compressing store for scalable vectors in SVE.
   SDValue VecOp = Store->getValue();
@@ -22575,10 +22576,10 @@ static SDValue combineMCOMPRESSStore(SelectionDAG &DAG,
   SDValue Vec = VecOp.getOperand(0);
   SDValue Mask = VecOp.getOperand(1);
 
-  return DAG.getMaskedStore(
-      Store->getChain(), DL, Vec, Store->getBasePtr(), DAG.getUNDEF(MVT::i64),
-      Mask, Store->getMemoryVT(), Store->getMemOperand(), ISD::UNINDEXED,
-      Store->isTruncatingStore(), /*IsCompressing=*/true);
+  return DAG.getMaskedStore(Store->getChain(), DL, Vec, Store->getBasePtr(),
+                            DAG.getUNDEF(MVT::i64), Mask, Store->getMemoryVT(),
+                            Store->getMemOperand(), ISD::UNINDEXED,
+                            Store->isTruncatingStore(), /*IsCompressing=*/true);
 }
 
 static SDValue performSTORECombine(SDNode *N,

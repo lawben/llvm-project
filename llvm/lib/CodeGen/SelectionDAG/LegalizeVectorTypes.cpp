@@ -2405,7 +2405,8 @@ void DAGTypeLegalizer::SplitVecRes_MASKED_COMPRESS(SDNode *N, SDValue &Lo,
   Lo = DAG.getNode(ISD::MCOMPRESS, DL, LoVT, Lo, LoMask);
   Hi = DAG.getNode(ISD::MCOMPRESS, DL, HiVT, Hi, HiMask);
 
-  SDValue StackPtr = DAG.CreateStackTemporary(VecVT.getStoreSize(), DAG.getReducedAlign(VecVT, /*UseABI=*/false));
+  SDValue StackPtr = DAG.CreateStackTemporary(
+      VecVT.getStoreSize(), DAG.getReducedAlign(VecVT, /*UseABI=*/false));
   MachineFunction &MF = DAG.getMachineFunction();
   MachinePointerInfo PtrInfo = MachinePointerInfo::getFixedStack(
       MF, cast<FrameIndexSDNode>(StackPtr.getNode())->getIndex());
@@ -2417,7 +2418,8 @@ void DAGTypeLegalizer::SplitVecRes_MASKED_COMPRESS(SDNode *N, SDValue &Lo,
 
   SDValue Chain = DAG.getEntryNode();
   Chain = DAG.getStore(Chain, DL, Lo, StackPtr, PtrInfo);
-  Chain = DAG.getStore(Chain, DL, Hi, Offset, MachinePointerInfo::getUnknownStack(MF));
+  Chain = DAG.getStore(Chain, DL, Hi, Offset,
+                       MachinePointerInfo::getUnknownStack(MF));
 
   SDValue Compressed = DAG.getLoad(VecVT, DL, Chain, StackPtr, PtrInfo);
   std::tie(Lo, Hi) = DAG.SplitVector(Compressed, DL);
