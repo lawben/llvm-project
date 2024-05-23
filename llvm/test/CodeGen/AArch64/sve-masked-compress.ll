@@ -193,15 +193,6 @@ define <vscale x 8 x i32> @test_compress_large(<vscale x 8 x i32> %vec, <vscale 
     ret <vscale x 8 x i32> %out
 }
 
-;define <vscale x 3 x i32> @test_compress_narrow(<vscale x 3 x i32> %vec, <vscale x 3 x i1> %mask) {
-;    %out = call <vscale x 3 x i32> @llvm.masked.compress(<vscale x 3 x i32> %vec, <vscale x 3 x i1> %mask)
-;    ret <vscale x 3 x i32> %out
-;}
-
-;define <vscale x 3 x i3> @test_compress_narrow_illegal_element_type(<vscale x 3 x i3> %vec, <vscale x 3 x i1> %mask) {
-;    %out = call <vscale x 3 x i3> @llvm.masked.compress(<vscale x 3 x i3> %vec, <vscale x 3 x i1> %mask)
-;    ret <vscale x 3 x i3> %out
-;}
 
 ; We pass a placeholder value for the const_mask* tests to check that they are converted to a no-op by simply copying
 ; the second vector input register to the ret register or doing nothing.

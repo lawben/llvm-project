@@ -5783,6 +5783,11 @@ SDValue DAGTypeLegalizer::WidenVecRes_MASKED_COMPRESS(SDNode *N) {
                                     Mask.getValueType().getVectorElementType(),
                                     WideVecVT.getVectorElementCount());
 
+  assert((!WideVecVT.isScalableVector() ||
+          WideVecVT.getVectorElementCount().hasKnownScalarFactor(
+              Vec.getValueType().getVectorElementCount())) &&
+         "Cannot widen non-multiple of legal scalable vector element count.");
+
   SDValue WideVec = ModifyToType(Vec, WideVecVT);
   SDValue WideMask = ModifyToType(Mask, WideMaskVT);
   SDValue WidePassthru = ModifyToType(Passthru, WideVecVT);
