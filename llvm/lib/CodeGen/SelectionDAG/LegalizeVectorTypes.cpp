@@ -2382,11 +2382,47 @@ void DAGTypeLegalizer::SplitVecRes_MASKED_COMPRESS(SDNode *N, SDValue &Lo,
                                                    SDValue &Hi) {
   // This is not "trivial", as there is a dependency between the two subvectors.
   // Depending on the number of 1s in the mask, the elements from the Hi vector
-  // need to be moved to the Lo vector. So we just perform this as one "big"
-  // operation and then extract the Lo and Hi vectors from that. This gets rid
-  // of MASKED_COMPRESS and all other operands can be legalized later.
-  SDValue Compressed = TLI.expandMASKED_COMPRESS(N, DAG);
-  std::tie(Lo, Hi) = DAG.SplitVector(Compressed, SDLoc(N));
+  // need to be moved to the Lo vector. We try to use MCOMPRESS if the target
+  // has custom lowering with smaller types, as it is most likely faster than
+  // the fully expand path. Otherwise, just do the full expansion as one "big"
+  // operation and then extract the Lo and Hi vectors from that. This gets
+  // rid of MASKED_COMPRESS and all other operands can be legalized later.
+  SDLoc DL(N);
+  EVT VecVT = N->getValueType(0);
+
+  auto [LoVT, HiVT] = DAG.GetSplitDestVTs(VecVT);
+  if (!TLI.isOperationLegalOrCustom(ISD::MCOMPRESS, LoVT)) {
+    SDValue Compressed = TLI.expandMASKED_COMPRESS(N, DAG);
+    std::tie(Lo, Hi) = DAG.SplitVector(Compressed, DL);
+    return;
+  }
+
+  // Try to MCOMPRESS smaller vectors and combine via a stack store+load.
+  SDValue LoMask, HiMask;
+  std::tie(Lo, Hi) = DAG.SplitVectorOperand(N, 0);
+  std::tie(LoMask, HiMask) = SplitMask(N->getOperand(1));
+
+  Lo = DAG.getNode(ISD::MCOMPRESS, DL, LoVT, Lo, LoMask);
+  Hi = DAG.getNode(ISD::MCOMPRESS, DL, HiVT, Hi, HiMask);
+
+  SDValue StackPtr = DAG.CreateStackTemporary(VecVT.getStoreSize(), DAG.getReducedAlign(VecVT, /*UseABI=*/false));
+  MachineFunction &MF = DAG.getMachineFunction();
+  MachinePointerInfo PtrInfo = MachinePointerInfo::getFixedStack(
+      MF, cast<FrameIndexSDNode>(StackPtr.getNode())->getIndex());
+
+  // We store LoVec and then insert HiVec starting at offset=|1s| in LoMask.
+  EVT PtrVT =  StackPtr.getValueType();
+  EVT ScalarVT = VecVT.getScalarType();
+  SDValue WideMask = DAG.getNode(ISD::ZERO_EXTEND, DL, LoVT, LoMask);
+  SDValue Offset = DAG.getNode(ISD::VECREDUCE_ADD, DL, MVT::i32, WideMask);
+  Offset = TLI.getVectorElementPointer(DAG, StackPtr, VecVT, Offset);
+
+  SDValue Chain = DAG.getEntryNode();
+  Chain = DAG.getStore(Chain, DL, Lo, StackPtr, PtrInfo);
+  Chain = DAG.getStore(Chain, DL, Hi, Offset, MachinePointerInfo::getUnknownStack(MF));
+
+  SDValue Compressed = DAG.getLoad(VecVT, DL, Chain, StackPtr, PtrInfo);
+  std::tie(Lo, Hi) = DAG.SplitVector(Compressed, DL);
 }
 
 void DAGTypeLegalizer::SplitVecRes_SETCC(SDNode *N, SDValue &Lo, SDValue &Hi) {
@@ -5745,7 +5781,7 @@ SDValue DAGTypeLegalizer::WidenVecRes_MASKED_COMPRESS(SDNode *N) {
       TLI.getTypeToTransformTo(*DAG.getContext(), Vec.getValueType());
   EVT WideMaskVT = EVT::getVectorVT(*DAG.getContext(),
                                     Mask.getValueType().getVectorElementType(),
-                                    WideVecVT.getVectorNumElements());
+                                    WideVecVT.getVectorElementCount());
 
   SDValue WideVec = ModifyToType(Vec, WideVecVT);
   SDValue WideMask = ModifyToType(Mask, WideMaskVT);

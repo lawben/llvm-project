@@ -1502,6 +1502,14 @@ AArch64TargetLowering::AArch64TargetLowering(const TargetMachine &TM,
                     MVT::nxv4bf16, MVT::nxv2f16, MVT::nxv4f16, MVT::nxv2f32})
       setOperationAction(ISD::BITCAST, VT, Custom);
 
+    // We can lower types that have <vscale x {2|4}> elements to svcompact and
+    // legal i8/i16 types via a compressing store.
+    for (auto VT :
+         {MVT::nxv2i8, MVT::nxv2i16, MVT::nxv2i32, MVT::nxv2i64, MVT::nxv2f32,
+          MVT::nxv2f64, MVT::nxv4i8, MVT::nxv4i16, MVT::nxv4i32, MVT::nxv4f32,
+          MVT::nxv8i8, MVT::nxv8i16, MVT::nxv16i8})
+      setOperationAction(ISD::MCOMPRESS, VT, Custom);
+
     for (auto VT :
          { MVT::nxv2i8, MVT::nxv2i16, MVT::nxv2i32, MVT::nxv2i64, MVT::nxv4i8,
            MVT::nxv4i16, MVT::nxv4i32, MVT::nxv8i8, MVT::nxv8i16 })
@@ -6290,6 +6298,71 @@ SDValue AArch64TargetLowering::LowerMSCATTER(SDValue Op,
   return Op;
 }
 
+SDValue AArch64TargetLowering::LowerMCOMPRESS(SDValue Op, SelectionDAG &DAG) const {
+  SDLoc DL(Op);
+  SDValue Vec = Op.getOperand(0);
+  SDValue Mask = Op.getOperand(1);
+  const EVT VecVT = Vec.getValueType();
+  const EVT MaskVT = Mask.getValueType();
+  const EVT ElmtVT = VecVT.getVectorElementType();
+
+  // We currently only have a custom lowering for scalable vectors.
+  if (!VecVT.isScalableVector())
+    return SDValue();
+
+  // Special case where we can't use svcompact but can do a compressing store
+  // and then reload the vector.
+  if (VecVT == MVT::nxv8i8 || VecVT == MVT::nxv16i8 || VecVT == MVT::nxv8i16) {
+    SDValue StackPtr = DAG.CreateStackTemporary(VecVT);
+    int FI = cast<FrameIndexSDNode>(StackPtr.getNode())->getIndex();
+    MachinePointerInfo PtrInfo =
+        MachinePointerInfo::getFixedStack(DAG.getMachineFunction(), FI);
+
+    MachineMemOperand *MMO = DAG.getMachineFunction().getMachineMemOperand(
+        PtrInfo, MachineMemOperand::Flags::MOStore,
+        LocationSize::precise(VecVT.getStoreSize()),
+        DAG.getReducedAlign(VecVT, /*UseABI=*/false));
+
+    SDValue Chain = DAG.getEntryNode();
+    Chain = DAG.getMaskedStore(Chain, DL, Vec, StackPtr, DAG.getUNDEF(MVT::i64),
+                               Mask, VecVT, MMO, ISD::UNINDEXED, false, true);
+
+    return DAG.getLoad(VecVT, DL, Chain, StackPtr, PtrInfo);
+  }
+
+  // Only <vscale x {2|4} x {i32|i64}> supported for svcompact.
+  unsigned MinElmts = VecVT.getVectorElementCount().getKnownMinValue();
+  if (MinElmts != 2 && MinElmts != 4)
+    return SDValue();
+
+  // Get legal type for svcompact instruction
+  EVT ContainerVT = getSVEContainerType(VecVT);
+  EVT CastVT = VecVT.changeVectorElementTypeToInteger();
+
+  // Convert to i32 or i64 for smaller types, as these are the only supported
+  // sizes for svcompact.
+  if (ContainerVT != VecVT) {
+    Vec = DAG.getBitcast(CastVT, Vec);
+    Vec = DAG.getNode(ISD::ANY_EXTEND, DL, ContainerVT, Vec);
+  }
+
+  // TODO: I don't think we need this, as hte mak should always be vNi1.
+  if (MaskVT.getVectorElementType().getSizeInBits() > 1)
+    Mask = DAG.getNode(ISD::TRUNCATE, DL, MaskVT.changeVectorElementType(MVT::i1), Mask);
+
+  SDValue Compressed =  DAG.getNode(
+      ISD::INTRINSIC_WO_CHAIN, DL, Vec.getValueType(),
+      DAG.getConstant(Intrinsic::aarch64_sve_compact, DL, MVT::i64), Mask, Vec);
+
+  // If we changed the element type before, we need to convert it back.
+  if (ContainerVT != VecVT) {
+    Compressed = DAG.getNode(ISD::TRUNCATE, DL, CastVT, Compressed);
+    Compressed = DAG.getBitcast(VecVT, Compressed);
+  }
+
+  return Compressed;
+}
+
 SDValue AArch64TargetLowering::LowerMLOAD(SDValue Op, SelectionDAG &DAG) const {
   SDLoc DL(Op);
   MaskedLoadSDNode *LoadNode = cast<MaskedLoadSDNode>(Op);
@@ -6833,6 +6906,8 @@ SDValue AArch64TargetLowering::LowerOperation(SDValue Op,
   case ISD::VECREDUCE_FMAXIMUM:
   case ISD::VECREDUCE_FMINIMUM:
     return LowerVECREDUCE(Op, DAG);
+  case ISD::MCOMPRESS:
+    return LowerMCOMPRESS(Op, DAG);
   case ISD::ATOMIC_LOAD_AND:
     return LowerATOMIC_LOAD_AND(Op, DAG);
   case ISD::DYNAMIC_STACKALLOC:
@@ -25772,6 +25847,10 @@ void AArch64TargetLowering::ReplaceNodeResults(
   case ISD::VECREDUCE_UMAX:
   case ISD::VECREDUCE_UMIN:
     Results.push_back(LowerVECREDUCE(SDValue(N, 0), DAG));
+    return;
+  case ISD::MCOMPRESS:
+    if (SDValue Res = LowerMCOMPRESS(SDValue(N, 0), DAG))
+      Results.push_back(Res);
     return;
   case ISD::ADD:
   case ISD::FADD:
