@@ -223,7 +223,6 @@ define <vscale x 4 x i32> @test_compress_const_splat0_mask(<vscale x 4 x i32> %i
 define <vscale x 4 x i32> @test_compress_undef_mask(<vscale x 4 x i32> %ignore, <vscale x 4 x i32> %vec) {
 ; CHECK-LABEL: test_compress_undef_mask:
 ; CHECK:       // %bb.0:
-; CHECK-NEXT:    compact z0.s, p0, z1.s
 ; CHECK-NEXT:    ret
     %out = call <vscale x 4 x i32> @llvm.masked.compress(<vscale x 4 x i32> %vec, <vscale x 4 x i1> undef)
     ret <vscale x 4 x i32> %out
