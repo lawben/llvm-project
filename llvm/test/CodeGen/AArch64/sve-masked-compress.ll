@@ -191,6 +191,68 @@ define <vscale x 8 x i32> @test_compress_large(<vscale x 8 x i32> %vec, <vscale 
     ret <vscale x 8 x i32> %out
 }
 
+define <vscale x 64 x i8> @test_compress_very_large(<vscale x 64 x i8> %vec, <vscale x 64 x i1> %mask) {
+; CHECK-LABEL: test_compress_very_large:
+; CHECK:       // %bb.0:
+; CHECK-NEXT:    str x29, [sp, #-16]! // 8-byte Folded Spill
+; CHECK-NEXT:    addvl sp, sp, #-1
+; CHECK-NEXT:    str p4, [sp, #7, mul vl] // 2-byte Folded Spill
+; CHECK-NEXT:    addvl sp, sp, #-8
+; CHECK-NEXT:    .cfi_escape 0x0f, 0x0d, 0x8f, 0x00, 0x11, 0x10, 0x22, 0x11, 0xc8, 0x00, 0x92, 0x2e, 0x00, 0x1e, 0x22 // sp + 16 + 72 * VG
+; CHECK-NEXT:    .cfi_offset w29, -16
+; CHECK-NEXT:    mov z4.b, p0/z, #1 // =0x1
+; CHECK-NEXT:    ptrue p4.b
+; CHECK-NEXT:    st1b { z0.b }, p0, [sp]
+; CHECK-NEXT:    mov z5.b, p2/z, #1 // =0x1
+; CHECK-NEXT:    mov z0.b, #1 // =0x1
+; CHECK-NEXT:    rdvl x9, #2
+; CHECK-NEXT:    sub x9, x9, #1
+; CHECK-NEXT:    mov x11, sp
+; CHECK-NEXT:    uaddv d6, p4, z4.b
+; CHECK-NEXT:    uaddv d5, p4, z5.b
+; CHECK-NEXT:    add z4.b, p1/m, z4.b, z0.b
+; CHECK-NEXT:    fmov x8, d6
+; CHECK-NEXT:    fmov x10, d5
+; CHECK-NEXT:    and x8, x8, #0xffffffff
+; CHECK-NEXT:    cmp x8, x9
+; CHECK-NEXT:    and x10, x10, #0xffffffff
+; CHECK-NEXT:    csel x8, x8, x9, lo
+; CHECK-NEXT:    cmp x10, x9
+; CHECK-NEXT:    st1b { z1.b }, p1, [x11, x8]
+; CHECK-NEXT:    addvl x8, sp, #2
+; CHECK-NEXT:    csel x9, x10, x9, lo
+; CHECK-NEXT:    st1b { z2.b }, p2, [sp, #2, mul vl]
+; CHECK-NEXT:    uaddv d1, p4, z4.b
+; CHECK-NEXT:    addvl x10, sp, #4
+; CHECK-NEXT:    st1b { z3.b }, p3, [x8, x9]
+; CHECK-NEXT:    rdvl x8, #4
+; CHECK-NEXT:    ld1b { z0.b }, p4/z, [sp, #1, mul vl]
+; CHECK-NEXT:    sub x8, x8, #1
+; CHECK-NEXT:    fmov x9, d1
+; CHECK-NEXT:    st1b { z0.b }, p4, [sp, #5, mul vl]
+; CHECK-NEXT:    ld1b { z0.b }, p4/z, [sp]
+; CHECK-NEXT:    and x9, x9, #0xffffffff
+; CHECK-NEXT:    st1b { z0.b }, p4, [sp, #4, mul vl]
+; CHECK-NEXT:    ld1b { z0.b }, p4/z, [sp, #2, mul vl]
+; CHECK-NEXT:    cmp x9, x8
+; CHECK-NEXT:    csel x8, x9, x8, lo
+; CHECK-NEXT:    st1b { z0.b }, p4, [x10, x8]
+; CHECK-NEXT:    add x8, x10, x8
+; CHECK-NEXT:    ld1b { z0.b }, p4/z, [sp, #3, mul vl]
+; CHECK-NEXT:    st1b { z0.b }, p4, [x8, #1, mul vl]
+; CHECK-NEXT:    ld1b { z0.b }, p4/z, [sp, #4, mul vl]
+; CHECK-NEXT:    ld1b { z1.b }, p4/z, [sp, #5, mul vl]
+; CHECK-NEXT:    ld1b { z2.b }, p4/z, [sp, #6, mul vl]
+; CHECK-NEXT:    ld1b { z3.b }, p4/z, [sp, #7, mul vl]
+; CHECK-NEXT:    addvl sp, sp, #8
+; CHECK-NEXT:    ldr p4, [sp, #7, mul vl] // 2-byte Folded Reload
+; CHECK-NEXT:    addvl sp, sp, #1
+; CHECK-NEXT:    ldr x29, [sp], #16 // 8-byte Folded Reload
+; CHECK-NEXT:    ret
+    %out = call <vscale x 64 x i8> @llvm.masked.compress(<vscale x 64 x i8> %vec, <vscale x 64 x i1> %mask)
+    ret <vscale x 64 x i8> %out
+}
+
 
 ; We pass a placeholder value for the const_mask* tests to check that they are converted to a no-op by simply copying
 ; the second vector input register to the ret register or doing nothing.

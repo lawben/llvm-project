@@ -2391,9 +2391,19 @@ void DAGTypeLegalizer::SplitVecRes_MASKED_COMPRESS(SDNode *N, SDValue &Lo,
   EVT VecVT = N->getValueType(0);
 
   auto [LoVT, HiVT] = DAG.GetSplitDestVTs(VecVT);
-  if (!TLI.isOperationLegalOrCustom(ISD::MCOMPRESS, LoVT)) {
+  bool HasLegalOrCustom = false;
+  EVT CheckVT = LoVT;
+  while (CheckVT.getVectorMinNumElements() > 1) {
+    if (TLI.isOperationLegalOrCustom(ISD::MCOMPRESS, CheckVT)) {
+      HasLegalOrCustom = true;
+      break;
+    }
+    CheckVT = CheckVT.getHalfNumVectorElementsVT(*DAG.getContext());
+  }
+
+  if (!HasLegalOrCustom) {
     SDValue Compressed = TLI.expandMASKED_COMPRESS(N, DAG);
-    std::tie(Lo, Hi) = DAG.SplitVector(Compressed, DL);
+    std::tie(Lo, Hi) = DAG.SplitVector(Compressed, DL, LoVT, HiVT);
     return;
   }
 
