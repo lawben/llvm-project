@@ -382,3 +382,62 @@ define <3 x i3> @test_compress_narrow_illegal_element_type(<3 x i3> %vec, <3 x i
     %out = call <3 x i3> @llvm.masked.compress.v3i3(<3 x i3> %vec, <3 x i1> %mask)
     ret <3 x i3> %out
 }
+
+define void @test_compress_store(<4 x i32> %vec, <4 x i1> %mask, ptr %ptr) {
+; CHECK-LABEL: test_compress_store:
+; CHECK:       ; %bb.0:
+; CHECK-NEXT:    ushll.4s v1, v1, #0
+; CHECK-NEXT:    str s0, [x0]
+; CHECK-NEXT:    shl.4s v1, v1, #31
+; CHECK-NEXT:    cmlt.4s v1, v1, #0
+; CHECK-NEXT:    mov.s w8, v1[1]
+; CHECK-NEXT:    mov.s w9, v1[2]
+; CHECK-NEXT:    fmov w10, s1
+; CHECK-NEXT:    and w11, w10, #0x1
+; CHECK-NEXT:    and x10, x10, #0x1
+; CHECK-NEXT:    and w8, w8, #0x1
+; CHECK-NEXT:    and w9, w9, #0x1
+; CHECK-NEXT:    add x10, x0, x10, lsl #2
+; CHECK-NEXT:    add w8, w11, w8
+; CHECK-NEXT:    add w9, w8, w9
+; CHECK-NEXT:    add x8, x0, w8, uxtw #2
+; CHECK-NEXT:    st1.s { v0 }[1], [x10]
+; CHECK-NEXT:    and x9, x9, #0x3
+; CHECK-NEXT:    add x9, x0, x9, lsl #2
+; CHECK-NEXT:    st1.s { v0 }[2], [x8]
+; CHECK-NEXT:    st1.s { v0 }[3], [x9]
+; CHECK-NEXT:    ret
+    %out = call <4 x i32> @llvm.masked.compress(<4 x i32> %vec, <4 x i1> %mask)
+    store <4 x i32> %out, ptr %ptr
+    ret void
+}
+
+define <4 x i32> @test_compress_store_with_ret(<4 x i32> %vec, <4 x i1> %mask, ptr %ptr) {
+; CHECK-LABEL: test_compress_store_with_ret:
+; CHECK:       ; %bb.0:
+; CHECK-NEXT:    ushll.4s v1, v1, #0
+; CHECK-NEXT:    str s0, [x0]
+; CHECK-NEXT:    shl.4s v1, v1, #31
+; CHECK-NEXT:    cmlt.4s v1, v1, #0
+; CHECK-NEXT:    mov.s w8, v1[1]
+; CHECK-NEXT:    mov.s w9, v1[2]
+; CHECK-NEXT:    fmov w10, s1
+; CHECK-NEXT:    and w11, w10, #0x1
+; CHECK-NEXT:    and x10, x10, #0x1
+; CHECK-NEXT:    and w8, w8, #0x1
+; CHECK-NEXT:    and w9, w9, #0x1
+; CHECK-NEXT:    add x10, x0, x10, lsl #2
+; CHECK-NEXT:    add w8, w11, w8
+; CHECK-NEXT:    add w9, w8, w9
+; CHECK-NEXT:    add x8, x0, w8, uxtw #2
+; CHECK-NEXT:    st1.s { v0 }[1], [x10]
+; CHECK-NEXT:    and x9, x9, #0x3
+; CHECK-NEXT:    add x9, x0, x9, lsl #2
+; CHECK-NEXT:    st1.s { v0 }[2], [x8]
+; CHECK-NEXT:    st1.s { v0 }[3], [x9]
+; CHECK-NEXT:    ldr q0, [x0]
+; CHECK-NEXT:    ret
+    %out = call <4 x i32> @llvm.masked.compress(<4 x i32> %vec, <4 x i1> %mask)
+    store <4 x i32> %out, ptr %ptr
+    ret <4 x i32> %out
+}

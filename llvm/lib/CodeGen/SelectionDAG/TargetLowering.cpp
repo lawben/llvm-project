@@ -11226,7 +11226,9 @@ SDValue TargetLowering::expandVectorSplice(SDNode *Node,
                      MachinePointerInfo::getUnknownStack(MF));
 }
 
-SDValue TargetLowering::expandMCOMPRESS(SDNode *Node, SelectionDAG &DAG) const {
+SDValue
+TargetLowering::expandMCOMPRESS(SDNode *Node, SelectionDAG &DAG,
+                                std::optional<SDValue> FollowingStore) const {
   SDLoc DL(Node);
   SDValue Vec = Node->getOperand(0);
   SDValue Mask = Node->getOperand(1);
@@ -11239,21 +11241,58 @@ SDValue TargetLowering::expandMCOMPRESS(SDNode *Node, SelectionDAG &DAG) const {
   if (VecVT.isScalableVector())
     report_fatal_error("Cannot expand masked_compress for scalable vectors.");
 
-  SDValue StackPtr = DAG.CreateStackTemporary(
-      VecVT.getStoreSize(), DAG.getReducedAlign(VecVT, /*UseABI=*/false));
-  SDValue Chain = DAG.getEntryNode();
-  SDValue OutPos = DAG.getConstant(0, DL, MVT::i32);
+  // If the vector is stored immediately after it is compressed, we can avoid
+  // expensive temporary stack stores and directly use to the store's location.
+  // We have to do this "top-down" from MCOMPRESS, as we create temporary stores
+  // here and can't make this decision in the DAGCombiner.
+  // Note that this is _not_ equivalent to a compressing masked store, as the
+  // semantics are different, i.e., MCOMPRESS + store potentially writes data
+  // for non-selected lanes while a compressing store cannot do this.
+  StoreSDNode *Store = nullptr;
 
+  if (FollowingStore) {
+    Store = cast<StoreSDNode>(*FollowingStore);
+  } else {
+    for (SDNode *Use : Node->uses()) {
+      if (Use->getOpcode() == ISD::STORE &&
+          Use->getOperand(1).getNode() == Node) {
+        Store = cast<StoreSDNode>(Use);
+        break;
+      }
+    }
+  }
+
+  SDValue StorePtr;
+  MachinePointerInfo StorePtrInfo;
+  SDValue Chain;
+
+  // Be defensive about which stores to combine.
+  if (Store && !Store->isIndexed() && !Store->isTruncatingStore()) {
+    StorePtr = Store->getBasePtr();
+    StorePtrInfo = Store->getPointerInfo();
+    Chain = Store->getChain();
+  } else {
+    StorePtr = DAG.CreateStackTemporary(
+        VecVT.getStoreSize(), DAG.getReducedAlign(VecVT, /*UseABI=*/false));
+    StorePtrInfo = MachinePointerInfo::getFixedStack(
+        DAG.getMachineFunction(),
+        cast<FrameIndexSDNode>(StorePtr.getNode())->getIndex());
+    Chain = DAG.getEntryNode();
+  }
+
+  SDValue OutPos = DAG.getConstant(0, DL, MVT::i32);
   const TargetLowering &TLI = DAG.getTargetLoweringInfo();
   unsigned NumElms = VecVT.getVectorNumElements();
+
   for (unsigned I = 0; I < NumElms; I++) {
     SDValue Idx = DAG.getVectorIdxConstant(I, DL);
 
     SDValue ValI = DAG.getNode(ISD::EXTRACT_VECTOR_ELT, DL, ScalarVT, Vec, Idx);
-    SDValue OutPtr = TLI.getVectorElementPointer(DAG, StackPtr, VecVT, OutPos);
+    SDValue OutPtr = TLI.getVectorElementPointer(DAG, StorePtr, VecVT, OutPos);
     Chain = DAG.getStore(
         Chain, DL, ValI, OutPtr,
-        MachinePointerInfo::getUnknownStack(DAG.getMachineFunction()));
+        Store ? StorePtrInfo
+              : MachinePointerInfo::getUnknownStack(DAG.getMachineFunction()));
 
     // Skip this for last element.
     if (I < NumElms - 1) {
@@ -11267,10 +11306,10 @@ SDValue TargetLowering::expandMCOMPRESS(SDNode *Node, SelectionDAG &DAG) const {
     }
   }
 
-  int FI = cast<FrameIndexSDNode>(StackPtr.getNode())->getIndex();
-  MachinePointerInfo PtrInfo =
-      MachinePointerInfo::getFixedStack(DAG.getMachineFunction(), FI);
-  return DAG.getLoad(VecVT, DL, Chain, StackPtr, PtrInfo);
+  if (Store)
+    DAG.ReplaceAllUsesWith(Store, Chain.getNode());
+
+  return DAG.getLoad(VecVT, DL, Chain, StorePtr, StorePtrInfo);
 }
 
 bool TargetLowering::LegalizeSetCCCondCode(SelectionDAG &DAG, EVT VT,
