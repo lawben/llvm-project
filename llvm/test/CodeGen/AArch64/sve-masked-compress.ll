@@ -298,3 +298,29 @@ define void @test_combine_compress_store_nxv4i32(<vscale x 4 x i32> %vec, <vscal
     store <vscale x 4 x i32> %out, ptr %ptr
     ret void
 }
+
+
+define <4 x i32> @test_compress_v4i32_with_sve(<4 x i32> %vec, <4 x i1> %mask) {
+    %out = call <4 x i32> @llvm.masked.compress(<4 x i32> %vec, <4 x i1> %mask)
+    ret <4 x i32> %out
+}
+
+define <1 x i32> @test_compress_v1i32_with_sve(<1 x i32> %vec, <1 x i1> %mask) {
+    %out = call <1 x i32> @llvm.masked.compress(<1 x i32> %vec, <1 x i1> %mask)
+    ret <1 x i32> %out
+}
+
+define <8 x i16> @test_compress_v8i16_with_sve(<8 x i16> %vec, <8 x i1> %mask) {
+    %out = call <8 x i16> @llvm.masked.compress(<8 x i16> %vec, <8 x i1> %mask)
+    ret <8 x i16> %out
+}
+
+define <4 x double> @test_compress_v4f64_with_sve(<4 x double> %vec, <4 x i1> %mask) {
+    %out = call <4 x double> @llvm.masked.compress(<4 x double> %vec, <4 x i1> %mask)
+    ret <4 x double> %out
+}
+
+define <2 x i16> @test_compress_v2i16_with_sve(<2 x i16> %vec, <2 x i1> %mask) {
+    %out = call <2 x i16> @llvm.masked.compress(<2 x i16> %vec, <2 x i1> %mask)
+    ret <2 x i16> %out
+}

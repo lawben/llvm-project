@@ -1510,6 +1510,15 @@ AArch64TargetLowering::AArch64TargetLowering(const TargetMachine &TM,
           MVT::nxv8i8, MVT::nxv8i16, MVT::nxv16i8})
       setOperationAction(ISD::MCOMPRESS, VT, Custom);
 
+    // If we have SVE, we can use SVE logic for legal (or smaller than legal)
+    // NEON vectors in the lowest bits of the SVE register.
+    if (Subtarget->hasSVEorSME())
+      for (auto VT : {MVT::v1i8, MVT::v1i16, MVT::v1i32, MVT::v1i64, MVT::v1f32,
+                      MVT::v1f64, MVT::v2i8, MVT::v2i16, MVT::v2i32, MVT::v2i64,
+                      MVT::v2f32, MVT::v2f64, MVT::v4i8, MVT::v4i16, MVT::v4i32,
+                      MVT::v4f32, MVT::v8i8, MVT::v8i16, MVT::v8i16})
+        setOperationAction(ISD::MCOMPRESS, VT, Custom);
+
     for (auto VT :
          { MVT::nxv2i8, MVT::nxv2i16, MVT::nxv2i32, MVT::nxv2i64, MVT::nxv4i8,
            MVT::nxv4i16, MVT::nxv4i32, MVT::nxv8i8, MVT::nxv8i16 })
@@ -6303,12 +6312,40 @@ SDValue AArch64TargetLowering::LowerMCOMPRESS(SDValue Op,
   SDLoc DL(Op);
   SDValue Vec = Op.getOperand(0);
   SDValue Mask = Op.getOperand(1);
-  const EVT VecVT = Vec.getValueType();
-  const EVT MaskVT = Mask.getValueType();
+  EVT VecVT = Vec.getValueType();
+  EVT MaskVT = Mask.getValueType();
+  EVT ElmtVT = VecVT.getVectorElementType();
+  const bool IsFixedLength = VecVT.isFixedLengthVector();
+  unsigned MinElmts = VecVT.getVectorElementCount().getKnownMinValue();
+  EVT FixedVecVT = MVT::getVectorVT(ElmtVT.getSimpleVT(), MinElmts);
 
-  // We currently only have a custom lowering for scalable vectors.
-  if (!VecVT.isScalableVector())
+  assert(VecVT.isVector() && "Input to MCOMPRESS must be vector.");
+
+  if (!Subtarget->hasSVEorSME())
     return SDValue();
+
+  if (IsFixedLength && VecVT.getSizeInBits().getFixedValue() > 128)
+    return SDValue();
+
+  // We can use the SVE register containing the NEON vector in its lowest bits.
+  if (IsFixedLength) {
+    EVT ScalableVecVT =
+        MVT::getScalableVectorVT(ElmtVT.getSimpleVT(), MinElmts);
+    EVT ScalableMaskVT = MVT::getScalableVectorVT(
+        MaskVT.getVectorElementType().getSimpleVT(), MinElmts);
+
+    Vec = DAG.getNode(ISD::INSERT_SUBVECTOR, DL, ScalableVecVT,
+                      DAG.getUNDEF(ScalableVecVT), Vec,
+                      DAG.getConstant(0, DL, MVT::i64));
+    Mask = DAG.getNode(ISD::INSERT_SUBVECTOR, DL, ScalableMaskVT,
+                       DAG.getUNDEF(ScalableMaskVT), Mask,
+                       DAG.getConstant(0, DL, MVT::i64));
+    Mask = DAG.getNode(ISD::TRUNCATE, DL,
+                       ScalableMaskVT.changeVectorElementType(MVT::i1), Mask);
+
+    VecVT = Vec.getValueType();
+    MaskVT = Mask.getValueType();
+  }
 
   // Special case where we can't use svcompact but can do a compressing store
   // and then reload the vector.
@@ -6327,11 +6364,15 @@ SDValue AArch64TargetLowering::LowerMCOMPRESS(SDValue Op,
     Chain = DAG.getMaskedStore(Chain, DL, Vec, StackPtr, DAG.getUNDEF(MVT::i64),
                                Mask, VecVT, MMO, ISD::UNINDEXED, false, true);
 
-    return DAG.getLoad(VecVT, DL, Chain, StackPtr, PtrInfo);
+    SDValue Compressed = DAG.getLoad(VecVT, DL, Chain, StackPtr, PtrInfo);
+    if (IsFixedLength)
+      Compressed = DAG.getNode(ISD::EXTRACT_SUBVECTOR, DL, FixedVecVT,
+                               Compressed, DAG.getConstant(0, DL, MVT::i64));
+
+    return Compressed;
   }
 
   // Only <vscale x {2|4} x {i32|i64}> supported for svcompact.
-  unsigned MinElmts = VecVT.getVectorElementCount().getKnownMinValue();
   if (MinElmts != 2 && MinElmts != 4)
     return SDValue();
 
@@ -6346,7 +6387,7 @@ SDValue AArch64TargetLowering::LowerMCOMPRESS(SDValue Op,
     Vec = DAG.getNode(ISD::ANY_EXTEND, DL, ContainerVT, Vec);
   }
 
-  // TODO: I don't think we need this, as hte mak should always be vNi1.
+  // TODO: I don't think we need this, as the mask should always be vNi1.
   if (MaskVT.getVectorElementType().getSizeInBits() > 1)
     Mask = DAG.getNode(ISD::TRUNCATE, DL,
                        MaskVT.changeVectorElementType(MVT::i1), Mask);
@@ -6354,6 +6395,16 @@ SDValue AArch64TargetLowering::LowerMCOMPRESS(SDValue Op,
   SDValue Compressed = DAG.getNode(
       ISD::INTRINSIC_WO_CHAIN, DL, Vec.getValueType(),
       DAG.getConstant(Intrinsic::aarch64_sve_compact, DL, MVT::i64), Mask, Vec);
+
+  // Extracting from a legal SVE type before truncating produces better code.
+  if (IsFixedLength) {
+    Compressed = DAG.getNode(
+        ISD::EXTRACT_SUBVECTOR, DL,
+        FixedVecVT.changeVectorElementType(ContainerVT.getVectorElementType()),
+        Compressed, DAG.getConstant(0, DL, MVT::i64));
+    CastVT = FixedVecVT.changeVectorElementTypeToInteger();
+    VecVT = FixedVecVT;
+  }
 
   // If we changed the element type before, we need to convert it back.
   if (ContainerVT != VecVT) {
