@@ -1512,7 +1512,7 @@ AArch64TargetLowering::AArch64TargetLowering(const TargetMachine &TM,
 
     // If we have SVE, we can use SVE logic for legal (or smaller than legal)
     // NEON vectors in the lowest bits of the SVE register.
-    if (Subtarget->hasSVEorSME())
+    if (Subtarget->hasSVE())
       for (auto VT : {MVT::v1i8, MVT::v1i16, MVT::v1i32, MVT::v1i64, MVT::v1f32,
                       MVT::v1f64, MVT::v2i8, MVT::v2i16, MVT::v2i32, MVT::v2i64,
                       MVT::v2f32, MVT::v2f64, MVT::v4i8, MVT::v4i16, MVT::v4i32,
@@ -6321,7 +6321,7 @@ SDValue AArch64TargetLowering::LowerMCOMPRESS(SDValue Op,
 
   assert(VecVT.isVector() && "Input to MCOMPRESS must be vector.");
 
-  if (!Subtarget->hasSVEorSME())
+  if (!Subtarget->hasSVE())
     return SDValue();
 
   if (IsFixedLength && VecVT.getSizeInBits().getFixedValue() > 128)
@@ -22615,21 +22615,48 @@ static SDValue combineI8TruncStore(StoreSDNode *ST, SelectionDAG &DAG,
   return Chain;
 }
 
-static SDValue combineMCOMPRESSStore(SelectionDAG &DAG, StoreSDNode *Store) {
+static SDValue combineMCOMPRESSStore(SelectionDAG &DAG, StoreSDNode *Store, const AArch64Subtarget *Subtarget) {
   // If the regular store is preceded by an MCOMPRESS, we can combine them into
   // a compressing store for scalable vectors in SVE.
   SDValue VecOp = Store->getValue();
   EVT VecVT = VecOp.getValueType();
-  if (VecOp.getOpcode() != ISD::MCOMPRESS || !VecVT.isScalableVector())
+  if (VecOp.getOpcode() != ISD::MCOMPRESS || !Subtarget->hasSVE())
+    return SDValue();
+
+  bool IsFixedLength = VecVT.isFixedLengthVector();
+  if (IsFixedLength && VecVT.getSizeInBits().getFixedValue() > 128)
     return SDValue();
 
   SDLoc DL(Store);
   SDValue Vec = VecOp.getOperand(0);
   SDValue Mask = VecOp.getOperand(1);
+  EVT MemVT = Store->getMemoryVT();
+  MachineMemOperand *MMO = Store->getMemOperand();
+
+  // We can use the SVE register containing the NEON vector in its lowest bits.
+  if (IsFixedLength) {
+    EVT ElmtVT = VecVT.getVectorElementType();
+    unsigned NumElmts = VecVT.getVectorNumElements();
+    EVT ScalableVecVT =
+        MVT::getScalableVectorVT(ElmtVT.getSimpleVT(), NumElmts);
+    EVT ScalableMaskVT = MVT::getScalableVectorVT(
+        Mask.getValueType().getVectorElementType().getSimpleVT(), NumElmts);
+
+    Vec = DAG.getNode(ISD::INSERT_SUBVECTOR, DL, ScalableVecVT,
+                      DAG.getUNDEF(ScalableVecVT), Vec,
+                      DAG.getConstant(0, DL, MVT::i64));
+    Mask = DAG.getNode(ISD::INSERT_SUBVECTOR, DL, ScalableMaskVT,
+                       DAG.getUNDEF(ScalableMaskVT), Mask,
+                       DAG.getConstant(0, DL, MVT::i64));
+    Mask = DAG.getNode(ISD::TRUNCATE, DL,
+                       ScalableMaskVT.changeVectorElementType(MVT::i1), Mask);
+    MemVT = ScalableVecVT;
+    MMO->setType(LLT::scalable_vector(NumElmts, ElmtVT.getSizeInBits()));
+  }
 
   return DAG.getMaskedStore(Store->getChain(), DL, Vec, Store->getBasePtr(),
-                            DAG.getUNDEF(MVT::i64), Mask, Store->getMemoryVT(),
-                            Store->getMemOperand(), ISD::UNINDEXED,
+                            DAG.getUNDEF(MVT::i64), Mask, MemVT,
+                            MMO, ISD::UNINDEXED,
                             Store->isTruncatingStore(), /*IsCompressing=*/true);
 }
 
@@ -22677,7 +22704,7 @@ static SDValue performSTORECombine(SDNode *N,
   if (SDValue Store = combineBoolVectorAndTruncateStore(DAG, ST))
     return Store;
 
-  if (SDValue Store = combineMCOMPRESSStore(DAG, ST))
+  if (SDValue Store = combineMCOMPRESSStore(DAG, ST, Subtarget))
     return Store;
 
   if (ST->isTruncatingStore()) {

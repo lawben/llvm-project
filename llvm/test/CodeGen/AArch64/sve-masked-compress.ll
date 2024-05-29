@@ -358,8 +358,9 @@ define <4 x double> @test_compress_v4f64_with_sve(<4 x double> %vec, <4 x i1> %m
 ; CHECK-NEXT:    .cfi_def_cfa_offset 32
 ; CHECK-NEXT:    ushll v2.4s, v2.4h, #0
 ; CHECK-NEXT:    ptrue p0.d
-; CHECK-NEXT:    // kill: def $q0 killed $q0 def $z0
+; CHECK-NEXT:    mov x10, sp
 ; CHECK-NEXT:    // kill: def $q1 killed $q1 def $z1
+; CHECK-NEXT:    // kill: def $q0 killed $q0 def $z0
 ; CHECK-NEXT:    ushll v3.2d, v2.2s, #0
 ; CHECK-NEXT:    ushll2 v4.2d, v2.4s, #0
 ; CHECK-NEXT:    fmov x8, d2
@@ -367,19 +368,15 @@ define <4 x double> @test_compress_v4f64_with_sve(<4 x double> %vec, <4 x i1> %m
 ; CHECK-NEXT:    shl v4.2d, v4.2d, #63
 ; CHECK-NEXT:    lsr x9, x8, #32
 ; CHECK-NEXT:    eor w8, w8, w9
-; CHECK-NEXT:    mov x9, sp
 ; CHECK-NEXT:    cmlt v3.2d, v3.2d, #0
 ; CHECK-NEXT:    cmlt v4.2d, v4.2d, #0
 ; CHECK-NEXT:    and x8, x8, #0x3
-; CHECK-NEXT:    lsl x8, x8, #3
 ; CHECK-NEXT:    and z3.d, z3.d, #0x1
 ; CHECK-NEXT:    and z4.d, z4.d, #0x1
 ; CHECK-NEXT:    cmpne p1.d, p0/z, z3.d, #0
 ; CHECK-NEXT:    cmpne p0.d, p0/z, z4.d, #0
-; CHECK-NEXT:    compact z0.d, p1, z0.d
-; CHECK-NEXT:    compact z1.d, p0, z1.d
-; CHECK-NEXT:    str q0, [sp]
-; CHECK-NEXT:    str q1, [x9, x8]
+; CHECK-NEXT:    st1d { z0.d }, p1, [x10]
+; CHECK-NEXT:    st1d { z1.d }, p0, [x10, x8, lsl #3]
 ; CHECK-NEXT:    ldp q0, q1, [sp], #32
 ; CHECK-NEXT:    ret
     %out = call <4 x double> @llvm.masked.compress(<4 x double> %vec, <4 x i1> %mask)
@@ -399,4 +396,34 @@ define <2 x i16> @test_compress_v2i16_with_sve(<2 x i16> %vec, <2 x i1> %mask) {
 ; CHECK-NEXT:    ret
     %out = call <2 x i16> @llvm.masked.compress(<2 x i16> %vec, <2 x i1> %mask)
     ret <2 x i16> %out
+}
+
+define void @test_combine_compress_store_v4i32_with_sve(<4 x i32> %vec, <4 x i1> %mask, ptr %ptr) {
+; CHECK-LABEL: test_combine_compress_store_v4i32_with_sve:
+; CHECK:       // %bb.0:
+; CHECK-NEXT:    ushll v1.4s, v1.4h, #0
+; CHECK-NEXT:    ptrue p0.s
+; CHECK-NEXT:    // kill: def $q0 killed $q0 def $z0
+; CHECK-NEXT:    and z1.s, z1.s, #0x1
+; CHECK-NEXT:    cmpne p0.s, p0/z, z1.s, #0
+; CHECK-NEXT:    st1w { z0.s }, p0, [x0]
+; CHECK-NEXT:    ret
+    %out = call <4 x i32> @llvm.masked.compress(<4 x i32> %vec, <4 x i1> %mask)
+    store <4 x i32> %out, ptr %ptr
+    ret void
+}
+
+define void @test_combine_compress_store_v16i8_with_sve(<16 x i8> %vec, <16 x i1> %mask, ptr %ptr) {
+; CHECK-LABEL: test_combine_compress_store_v16i8_with_sve:
+; CHECK:       // %bb.0:
+; CHECK-NEXT:    // kill: def $q1 killed $q1 def $z1
+; CHECK-NEXT:    ptrue p0.b
+; CHECK-NEXT:    // kill: def $q0 killed $q0 def $z0
+; CHECK-NEXT:    and z1.b, z1.b, #0x1
+; CHECK-NEXT:    cmpne p0.b, p0/z, z1.b, #0
+; CHECK-NEXT:    st1b { z0.b }, p0, [x0]
+; CHECK-NEXT:    ret
+    %out = call <16 x i8> @llvm.masked.compress(<16 x i8> %vec, <16 x i1> %mask)
+    store <16 x i8> %out, ptr %ptr
+    ret void
 }
