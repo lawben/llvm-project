@@ -22615,7 +22615,8 @@ static SDValue combineI8TruncStore(StoreSDNode *ST, SelectionDAG &DAG,
   return Chain;
 }
 
-static SDValue combineMCOMPRESSStore(SelectionDAG &DAG, StoreSDNode *Store, const AArch64Subtarget *Subtarget) {
+static SDValue combineMCOMPRESSStore(SelectionDAG &DAG, StoreSDNode *Store,
+                                     const AArch64Subtarget *Subtarget) {
   // If the regular store is preceded by an MCOMPRESS, we can combine them into
   // a compressing store for scalable vectors in SVE.
   SDValue VecOp = Store->getValue();
@@ -22655,9 +22656,9 @@ static SDValue combineMCOMPRESSStore(SelectionDAG &DAG, StoreSDNode *Store, cons
   }
 
   return DAG.getMaskedStore(Store->getChain(), DL, Vec, Store->getBasePtr(),
-                            DAG.getUNDEF(MVT::i64), Mask, MemVT,
-                            MMO, ISD::UNINDEXED,
-                            Store->isTruncatingStore(), /*IsCompressing=*/true);
+                            DAG.getUNDEF(MVT::i64), Mask, MemVT, MMO,
+                            ISD::UNINDEXED, Store->isTruncatingStore(),
+                            /*IsCompressing=*/true);
 }
 
 static SDValue performSTORECombine(SDNode *N,
