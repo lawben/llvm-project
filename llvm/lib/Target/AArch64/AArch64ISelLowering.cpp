@@ -1508,7 +1508,7 @@ AArch64TargetLowering::AArch64TargetLowering(const TargetMachine &TM,
          {MVT::nxv2i8, MVT::nxv2i16, MVT::nxv2i32, MVT::nxv2i64, MVT::nxv2f32,
           MVT::nxv2f64, MVT::nxv4i8, MVT::nxv4i16, MVT::nxv4i32, MVT::nxv4f32,
           MVT::nxv8i8, MVT::nxv8i16, MVT::nxv16i8})
-      setOperationAction(ISD::MCOMPRESS, VT, Custom);
+      setOperationAction(ISD::MASKED_COMPRESS, VT, Custom);
 
     // If we have SVE, we can use SVE logic for legal (or smaller than legal)
     // NEON vectors in the lowest bits of the SVE register.
@@ -1517,7 +1517,7 @@ AArch64TargetLowering::AArch64TargetLowering(const TargetMachine &TM,
                       MVT::v1f64, MVT::v2i8, MVT::v2i16, MVT::v2i32, MVT::v2i64,
                       MVT::v2f32, MVT::v2f64, MVT::v4i8, MVT::v4i16, MVT::v4i32,
                       MVT::v4f32, MVT::v8i8, MVT::v8i16, MVT::v8i16})
-        setOperationAction(ISD::MCOMPRESS, VT, Custom);
+        setOperationAction(ISD::MASKED_COMPRESS, VT, Custom);
 
     for (auto VT :
          { MVT::nxv2i8, MVT::nxv2i16, MVT::nxv2i32, MVT::nxv2i64, MVT::nxv4i8,
@@ -6307,7 +6307,7 @@ SDValue AArch64TargetLowering::LowerMSCATTER(SDValue Op,
   return Op;
 }
 
-SDValue AArch64TargetLowering::LowerMCOMPRESS(SDValue Op,
+SDValue AArch64TargetLowering::LowerMASKED_COMPRESS(SDValue Op,
                                               SelectionDAG &DAG) const {
   SDLoc DL(Op);
   SDValue Vec = Op.getOperand(0);
@@ -6319,7 +6319,7 @@ SDValue AArch64TargetLowering::LowerMCOMPRESS(SDValue Op,
   unsigned MinElmts = VecVT.getVectorElementCount().getKnownMinValue();
   EVT FixedVecVT = MVT::getVectorVT(ElmtVT.getSimpleVT(), MinElmts);
 
-  assert(VecVT.isVector() && "Input to MCOMPRESS must be vector.");
+  assert(VecVT.isVector() && "Input to MASKED_COMPRESS must be vector.");
 
   if (!Subtarget->hasSVE())
     return SDValue();
@@ -6958,8 +6958,8 @@ SDValue AArch64TargetLowering::LowerOperation(SDValue Op,
   case ISD::VECREDUCE_FMAXIMUM:
   case ISD::VECREDUCE_FMINIMUM:
     return LowerVECREDUCE(Op, DAG);
-  case ISD::MCOMPRESS:
-    return LowerMCOMPRESS(Op, DAG);
+  case ISD::MASKED_COMPRESS:
+    return LowerMASKED_COMPRESS(Op, DAG);
   case ISD::ATOMIC_LOAD_AND:
     return LowerATOMIC_LOAD_AND(Op, DAG);
   case ISD::DYNAMIC_STACKALLOC:
@@ -22615,13 +22615,13 @@ static SDValue combineI8TruncStore(StoreSDNode *ST, SelectionDAG &DAG,
   return Chain;
 }
 
-static SDValue combineMCOMPRESSStore(SelectionDAG &DAG, StoreSDNode *Store,
+static SDValue combineMASKED_COMPRESSStore(SelectionDAG &DAG, StoreSDNode *Store,
                                      const AArch64Subtarget *Subtarget) {
-  // If the regular store is preceded by an MCOMPRESS, we can combine them into
+  // If the regular store is preceded by an MASKED_COMPRESS, we can combine them into
   // a compressing store for scalable vectors in SVE.
   SDValue VecOp = Store->getValue();
   EVT VecVT = VecOp.getValueType();
-  if (VecOp.getOpcode() != ISD::MCOMPRESS || !Subtarget->hasSVE())
+  if (VecOp.getOpcode() != ISD::MASKED_COMPRESS || !Subtarget->hasSVE())
     return SDValue();
 
   bool IsFixedLength = VecVT.isFixedLengthVector();
@@ -22705,7 +22705,7 @@ static SDValue performSTORECombine(SDNode *N,
   if (SDValue Store = combineBoolVectorAndTruncateStore(DAG, ST))
     return Store;
 
-  if (SDValue Store = combineMCOMPRESSStore(DAG, ST, Subtarget))
+  if (SDValue Store = combineMASKED_COMPRESSStore(DAG, ST, Subtarget))
     return Store;
 
   if (ST->isTruncatingStore()) {
@@ -25949,8 +25949,8 @@ void AArch64TargetLowering::ReplaceNodeResults(
   case ISD::VECREDUCE_UMIN:
     Results.push_back(LowerVECREDUCE(SDValue(N, 0), DAG));
     return;
-  case ISD::MCOMPRESS:
-    if (SDValue Res = LowerMCOMPRESS(SDValue(N, 0), DAG))
+  case ISD::MASKED_COMPRESS:
+    if (SDValue Res = LowerMASKED_COMPRESS(SDValue(N, 0), DAG))
       Results.push_back(Res);
     return;
   case ISD::ADD:

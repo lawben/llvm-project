@@ -2382,7 +2382,7 @@ void DAGTypeLegalizer::SplitVecRes_MASKED_COMPRESS(SDNode *N, SDValue &Lo,
                                                    SDValue &Hi) {
   // This is not "trivial", as there is a dependency between the two subvectors.
   // Depending on the number of 1s in the mask, the elements from the Hi vector
-  // need to be moved to the Lo vector. We try to use MCOMPRESS if the target
+  // need to be moved to the Lo vector. We try to use MASKED_COMPRESS if the target
   // has custom lowering with smaller types, as it is most likely faster than
   // the fully expand path. Otherwise, just do the full expansion as one "big"
   // operation and then extract the Lo and Hi vectors from that. This gets
@@ -2394,7 +2394,7 @@ void DAGTypeLegalizer::SplitVecRes_MASKED_COMPRESS(SDNode *N, SDValue &Lo,
   bool HasLegalOrCustom = false;
   EVT CheckVT = LoVT;
   while (CheckVT.getVectorMinNumElements() > 1) {
-    if (TLI.isOperationLegalOrCustom(ISD::MCOMPRESS, CheckVT)) {
+    if (TLI.isOperationLegalOrCustom(ISD::MASKED_COMPRESS, CheckVT)) {
       HasLegalOrCustom = true;
       break;
     }
@@ -2407,13 +2407,13 @@ void DAGTypeLegalizer::SplitVecRes_MASKED_COMPRESS(SDNode *N, SDValue &Lo,
     return;
   }
 
-  // Try to MCOMPRESS smaller vectors and combine via a stack store+load.
+  // Try to MASKED_COMPRESS smaller vectors and combine via a stack store+load.
   SDValue LoMask, HiMask;
   std::tie(Lo, Hi) = DAG.SplitVectorOperand(N, 0);
   std::tie(LoMask, HiMask) = SplitMask(N->getOperand(1));
 
-  Lo = DAG.getNode(ISD::MCOMPRESS, DL, LoVT, Lo, LoMask);
-  Hi = DAG.getNode(ISD::MCOMPRESS, DL, HiVT, Hi, HiMask);
+  Lo = DAG.getNode(ISD::MASKED_COMPRESS, DL, LoVT, Lo, LoMask);
+  Hi = DAG.getNode(ISD::MASKED_COMPRESS, DL, HiVT, Hi, HiMask);
 
   SDValue StackPtr = DAG.CreateStackTemporary(
       VecVT.getStoreSize(), DAG.getReducedAlign(VecVT, /*UseABI=*/false));
