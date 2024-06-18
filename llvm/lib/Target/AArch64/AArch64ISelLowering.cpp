@@ -6308,14 +6308,16 @@ SDValue AArch64TargetLowering::LowerMSCATTER(SDValue Op,
 }
 
 SDValue AArch64TargetLowering::LowerMASKED_COMPRESS(SDValue Op,
-                                              SelectionDAG &DAG) const {
+                                                    SelectionDAG &DAG) const {
   SDLoc DL(Op);
   SDValue Vec = Op.getOperand(0);
   SDValue Mask = Op.getOperand(1);
+  SDValue Passthru = Op.getOperand(2);
   EVT VecVT = Vec.getValueType();
   EVT MaskVT = Mask.getValueType();
   EVT ElmtVT = VecVT.getVectorElementType();
   const bool IsFixedLength = VecVT.isFixedLengthVector();
+  const bool HasPassthru = !Passthru.isUndef();
   unsigned MinElmts = VecVT.getVectorElementCount().getKnownMinValue();
   EVT FixedVecVT = MVT::getVectorVT(ElmtVT.getSimpleVT(), MinElmts);
 
@@ -6342,6 +6344,9 @@ SDValue AArch64TargetLowering::LowerMASKED_COMPRESS(SDValue Op,
                        DAG.getConstant(0, DL, MVT::i64));
     Mask = DAG.getNode(ISD::TRUNCATE, DL,
                        ScalableMaskVT.changeVectorElementType(MVT::i1), Mask);
+    Passthru = DAG.getNode(ISD::INSERT_SUBVECTOR, DL, ScalableVecVT,
+                           DAG.getUNDEF(ScalableVecVT), Passthru,
+                           DAG.getConstant(0, DL, MVT::i64));
 
     VecVT = Vec.getValueType();
     MaskVT = Mask.getValueType();
@@ -6365,6 +6370,19 @@ SDValue AArch64TargetLowering::LowerMASKED_COMPRESS(SDValue Op,
                                Mask, VecVT, MMO, ISD::UNINDEXED, false, true);
 
     SDValue Compressed = DAG.getLoad(VecVT, DL, Chain, StackPtr, PtrInfo);
+
+    if (HasPassthru) {
+      SDValue Offset = DAG.getNode(
+          ISD::ZERO_EXTEND, DL, MaskVT.changeVectorElementType(ElmtVT), Mask);
+      Offset = DAG.getNode(ISD::VECREDUCE_ADD, DL, ElmtVT, Offset);
+      Compressed = DAG.getNode(
+          ISD::VP_MERGE, DL, VecVT,
+          DAG.getSplatVector(
+              MaskVT, DL,
+              DAG.getAllOnesConstant(DL, MaskVT.getVectorElementType())),
+          Compressed, Passthru, Offset);
+    }
+
     if (IsFixedLength)
       Compressed = DAG.getNode(ISD::EXTRACT_SUBVECTOR, DL, FixedVecVT,
                                Compressed, DAG.getConstant(0, DL, MVT::i64));
@@ -6395,6 +6413,19 @@ SDValue AArch64TargetLowering::LowerMASKED_COMPRESS(SDValue Op,
   SDValue Compressed = DAG.getNode(
       ISD::INTRINSIC_WO_CHAIN, DL, Vec.getValueType(),
       DAG.getConstant(Intrinsic::aarch64_sve_compact, DL, MVT::i64), Mask, Vec);
+
+  // svcompact fills with 0s, so if our passthru is all 0s, do nothing here.
+  if (HasPassthru && !ISD::isConstantSplatVectorAllZeros(Passthru.getNode())) {
+    SDValue Offset = DAG.getNode(
+        ISD::ZERO_EXTEND, DL, MaskVT.changeVectorElementType(MVT::i32), Mask);
+    Offset = DAG.getNode(ISD::VECREDUCE_ADD, DL, MVT::i32, Offset);
+    Compressed =
+        DAG.getNode(ISD::VP_MERGE, DL, VecVT,
+                    DAG.getSplatVector(MaskVT, DL,
+                                       DAG.getAllOnesConstant(
+                                           DL, MaskVT.getVectorElementType())),
+                    Compressed, Passthru, Offset);
+  }
 
   // Extracting from a legal SVE type before truncating produces better code.
   if (IsFixedLength) {
@@ -22615,10 +22646,11 @@ static SDValue combineI8TruncStore(StoreSDNode *ST, SelectionDAG &DAG,
   return Chain;
 }
 
-static SDValue combineMASKED_COMPRESSStore(SelectionDAG &DAG, StoreSDNode *Store,
-                                     const AArch64Subtarget *Subtarget) {
-  // If the regular store is preceded by an MASKED_COMPRESS, we can combine them into
-  // a compressing store for scalable vectors in SVE.
+static SDValue combineMASKED_COMPRESSStore(SelectionDAG &DAG,
+                                           StoreSDNode *Store,
+                                           const AArch64Subtarget *Subtarget) {
+  // If the regular store is preceded by an MASKED_COMPRESS, we can combine them
+  // into a compressing store for scalable vectors in SVE.
   SDValue VecOp = Store->getValue();
   EVT VecVT = VecOp.getValueType();
   if (VecOp.getOpcode() != ISD::MASKED_COMPRESS || !Subtarget->hasSVE())
