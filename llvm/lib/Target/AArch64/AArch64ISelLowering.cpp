@@ -1516,7 +1516,7 @@ AArch64TargetLowering::AArch64TargetLowering(const TargetMachine &TM,
       for (auto VT : {MVT::v1i8, MVT::v1i16, MVT::v1i32, MVT::v1i64, MVT::v1f32,
                       MVT::v1f64, MVT::v2i8, MVT::v2i16, MVT::v2i32, MVT::v2i64,
                       MVT::v2f32, MVT::v2f64, MVT::v4i8, MVT::v4i16, MVT::v4i32,
-                      MVT::v4f32, MVT::v8i8, MVT::v8i16, MVT::v8i16})
+                      MVT::v4f32, MVT::v8i8, MVT::v8i16, MVT::v8i16, MVT::v16i8})
         setOperationAction(ISD::MASKED_COMPRESS, VT, Custom);
 
     for (auto VT :
@@ -6366,22 +6366,13 @@ SDValue AArch64TargetLowering::LowerMASKED_COMPRESS(SDValue Op,
         DAG.getReducedAlign(VecVT, /*UseABI=*/false));
 
     SDValue Chain = DAG.getEntryNode();
+    if (HasPassthru)
+      Chain = DAG.getStore(Chain, DL, Passthru, StackPtr, PtrInfo);
+
     Chain = DAG.getMaskedStore(Chain, DL, Vec, StackPtr, DAG.getUNDEF(MVT::i64),
-                               Mask, VecVT, MMO, ISD::UNINDEXED, false, true);
+                               Mask, VecVT, MMO, ISD::UNINDEXED, /*IsTruncating=*/false, /*IsCompressing=*/true);
 
     SDValue Compressed = DAG.getLoad(VecVT, DL, Chain, StackPtr, PtrInfo);
-
-    if (HasPassthru) {
-      SDValue Offset = DAG.getNode(
-          ISD::ZERO_EXTEND, DL, MaskVT.changeVectorElementType(ElmtVT), Mask);
-      Offset = DAG.getNode(ISD::VECREDUCE_ADD, DL, ElmtVT, Offset);
-      Compressed = DAG.getNode(
-          ISD::VP_MERGE, DL, VecVT,
-          DAG.getSplatVector(
-              MaskVT, DL,
-              DAG.getAllOnesConstant(DL, MaskVT.getVectorElementType())),
-          Compressed, Passthru, Offset);
-    }
 
     if (IsFixedLength)
       Compressed = DAG.getNode(ISD::EXTRACT_SUBVECTOR, DL, FixedVecVT,
@@ -6404,11 +6395,6 @@ SDValue AArch64TargetLowering::LowerMASKED_COMPRESS(SDValue Op,
     Vec = DAG.getBitcast(CastVT, Vec);
     Vec = DAG.getNode(ISD::ANY_EXTEND, DL, ContainerVT, Vec);
   }
-
-  // TODO: I don't think we need this, as the mask should always be vNi1.
-  if (MaskVT.getVectorElementType().getSizeInBits() > 1)
-    Mask = DAG.getNode(ISD::TRUNCATE, DL,
-                       MaskVT.changeVectorElementType(MVT::i1), Mask);
 
   SDValue Compressed = DAG.getNode(
       ISD::INTRINSIC_WO_CHAIN, DL, Vec.getValueType(),
@@ -22663,8 +22649,10 @@ static SDValue combineMASKED_COMPRESSStore(SelectionDAG &DAG,
   SDLoc DL(Store);
   SDValue Vec = VecOp.getOperand(0);
   SDValue Mask = VecOp.getOperand(1);
+  SDValue Passthru = VecOp.getOperand(2);
   EVT MemVT = Store->getMemoryVT();
   MachineMemOperand *MMO = Store->getMemOperand();
+  SDValue Chain = Store->getChain();
 
   // We can use the SVE register containing the NEON vector in its lowest bits.
   if (IsFixedLength) {
@@ -22683,11 +22671,23 @@ static SDValue combineMASKED_COMPRESSStore(SelectionDAG &DAG,
                        DAG.getConstant(0, DL, MVT::i64));
     Mask = DAG.getNode(ISD::TRUNCATE, DL,
                        ScalableMaskVT.changeVectorElementType(MVT::i1), Mask);
+    Passthru = DAG.getNode(ISD::INSERT_SUBVECTOR, DL, ScalableVecVT,
+                           DAG.getUNDEF(ScalableVecVT), Passthru,
+                           DAG.getConstant(0, DL, MVT::i64));
+
     MemVT = ScalableVecVT;
     MMO->setType(LLT::scalable_vector(NumElmts, ElmtVT.getSizeInBits()));
   }
 
-  return DAG.getMaskedStore(Store->getChain(), DL, Vec, Store->getBasePtr(),
+  // If the passthru is all 0s, we don't need an explicit passthru store.
+  unsigned MinElmts = VecVT.getVectorMinNumElements();
+  if (ISD::isConstantSplatVectorAllZeros(Passthru.getNode()) && (MinElmts == 2 || MinElmts == 4))
+    return SDValue();
+
+  if (!Passthru.isUndef())
+    Chain = DAG.getStore(Chain, DL, Passthru, Store->getBasePtr(), MMO);
+
+  return DAG.getMaskedStore(Chain, DL, Vec, Store->getBasePtr(),
                             DAG.getUNDEF(MVT::i64), Mask, MemVT, MMO,
                             ISD::UNINDEXED, Store->isTruncatingStore(),
                             /*IsCompressing=*/true);

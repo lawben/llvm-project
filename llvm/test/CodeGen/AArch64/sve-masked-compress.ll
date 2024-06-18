@@ -418,7 +418,6 @@ define void @test_combine_compress_store_v16i8_with_sve(<16 x i8> %vec, <16 x i1
     ret void
 }
 
-
 define <vscale x 4 x i32> @test_compress_nxv4i32_with_passthru(<vscale x 4 x i32> %vec, <vscale x 4 x i1> %mask, <vscale x 4 x i32> %passthru) {
 ; CHECK-LABEL: test_compress_nxv4i32_with_passthru:
 ; CHECK:       // %bb.0:
@@ -470,16 +469,10 @@ define <vscale x 16 x i8> @test_compress_nxv16i8_with_passthru(<vscale x 16 x i8
 ; CHECK-NEXT:    addvl sp, sp, #-1
 ; CHECK-NEXT:    .cfi_escape 0x0f, 0x0c, 0x8f, 0x00, 0x11, 0x10, 0x22, 0x11, 0x08, 0x92, 0x2e, 0x00, 0x1e, 0x22 // sp + 16 + 8 * VG
 ; CHECK-NEXT:    .cfi_offset w29, -16
-; CHECK-NEXT:    mov z2.b, p0/z, #1 // =0x1
 ; CHECK-NEXT:    ptrue p1.b
+; CHECK-NEXT:    st1b { z1.b }, p1, [sp]
 ; CHECK-NEXT:    st1b { z0.b }, p0, [sp]
 ; CHECK-NEXT:    ld1b { z0.b }, p1/z, [sp]
-; CHECK-NEXT:    uaddv d2, p1, z2.b
-; CHECK-NEXT:    fmov x8, d2
-; CHECK-NEXT:    index z2.b, #0, #1
-; CHECK-NEXT:    mov z3.b, w8
-; CHECK-NEXT:    cmphi p0.b, p1/z, z3.b, z2.b
-; CHECK-NEXT:    sel z0.b, p0, z0.b, z1.b
 ; CHECK-NEXT:    addvl sp, sp, #1
 ; CHECK-NEXT:    ldr x29, [sp], #16 // 8-byte Folded Reload
 ; CHECK-NEXT:    ret
@@ -494,17 +487,11 @@ define <vscale x 16 x i8> @test_compress_nxv16i8_with_const_passthru(<vscale x 1
 ; CHECK-NEXT:    addvl sp, sp, #-1
 ; CHECK-NEXT:    .cfi_escape 0x0f, 0x0c, 0x8f, 0x00, 0x11, 0x10, 0x22, 0x11, 0x08, 0x92, 0x2e, 0x00, 0x1e, 0x22 // sp + 16 + 8 * VG
 ; CHECK-NEXT:    .cfi_offset w29, -16
-; CHECK-NEXT:    mov z1.b, p0/z, #1 // =0x1
+; CHECK-NEXT:    mov z1.b, #5 // =0x5
 ; CHECK-NEXT:    ptrue p1.b
+; CHECK-NEXT:    st1b { z1.b }, p1, [sp]
 ; CHECK-NEXT:    st1b { z0.b }, p0, [sp]
 ; CHECK-NEXT:    ld1b { z0.b }, p1/z, [sp]
-; CHECK-NEXT:    uaddv d1, p1, z1.b
-; CHECK-NEXT:    fmov x8, d1
-; CHECK-NEXT:    index z1.b, #0, #1
-; CHECK-NEXT:    mov z2.b, w8
-; CHECK-NEXT:    cmphi p0.b, p1/z, z2.b, z1.b
-; CHECK-NEXT:    mov z1.b, #5 // =0x5
-; CHECK-NEXT:    sel z0.b, p0, z0.b, z1.b
 ; CHECK-NEXT:    addvl sp, sp, #1
 ; CHECK-NEXT:    ldr x29, [sp], #16 // 8-byte Folded Reload
 ; CHECK-NEXT:    ret
