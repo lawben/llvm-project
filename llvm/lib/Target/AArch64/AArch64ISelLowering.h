@@ -1070,6 +1070,8 @@ private:
   SDValue LowerMGATHER(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerMSCATTER(SDValue Op, SelectionDAG &DAG) const;
 
+  SDValue LowerMASKED_COMPRESS(SDValue Op, SelectionDAG &DAG) const;
+
   SDValue LowerMLOAD(SDValue Op, SelectionDAG &DAG) const;
 
   SDValue LowerINTRINSIC_W_CHAIN(SDValue Op, SelectionDAG &DAG) const;
